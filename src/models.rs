@@ -227,7 +227,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Symbol cannot be empty"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Symbol cannot be empty"));
     }
 
     #[test]
@@ -243,7 +246,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Amount per share must be positive"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Amount per share must be positive"));
     }
 
     #[test]
@@ -259,7 +265,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Pay date cannot be before ex-dividend date"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Pay date cannot be before ex-dividend date"));
     }
 
     #[test]
@@ -287,7 +296,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Shares must be positive"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Shares must be positive"));
     }
 
     #[test]
@@ -300,7 +312,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Current yield cannot be negative"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Current yield cannot be negative"));
     }
 
     #[test]
@@ -321,7 +336,8 @@ mod tests {
             dec!(0.94),
             dec!(100),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         tracker.add_dividend(dividend);
         assert_eq!(tracker.dividends.len(), 1);
@@ -335,7 +351,8 @@ mod tests {
             dec!(100),
             Some(dec!(150.00)),
             Some(dec!(2.5)),
-        ).unwrap();
+        )
+        .unwrap();
 
         tracker.add_holding(holding);
         assert_eq!(tracker.holdings.len(), 1);
@@ -354,7 +371,8 @@ mod tests {
             dec!(0.94),
             dec!(100),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         let dividend2 = Dividend::new(
             "MSFT".to_string(),
@@ -364,7 +382,8 @@ mod tests {
             dec!(0.75),
             dec!(50),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         tracker.add_dividend(dividend1);
         tracker.add_dividend(dividend2);
@@ -386,7 +405,8 @@ mod tests {
             dec!(0.94),
             dec!(100),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         let dividend2 = Dividend::new(
             "MSFT".to_string(),
@@ -396,7 +416,8 @@ mod tests {
             dec!(0.75),
             dec!(50),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         tracker.add_dividend(dividend1);
         tracker.add_dividend(dividend2);
@@ -415,7 +436,8 @@ mod tests {
             dec!(0.94),
             dec!(100),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(dividend.symbol, "AAPL");
     }
@@ -430,7 +452,8 @@ mod tests {
             dec!(0.94),
             dec!(100),
             DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
 
         let json = serde_json::to_string(&dividend);
         assert!(json.is_ok());
