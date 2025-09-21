@@ -1,0 +1,29 @@
+{
+  "dividends": [],
+  "holdings": {
+    "AAPL": {
+      "symbol": "AAPL",
+      "shares": "100",
+      "avg_cost_basis": "150.00",
+      "current_yield": null
+    },
+    "MSFT": {
+      "symbol": "MSFT",
+      "shares": "50",
+      "avg_cost_basis": "120.00",
+      "current_yield": "2.5"
+    },
+    "GOOGL": {
+      "symbol": "GOOGL",
+      "shares": "25",
+      "avg_cost_basis": "200.50",
+      "current_yield": "1.8"
+    },
+    "TSLA": {
+      "symbol": "TSLA",
+      "shares": "75",
+      "avg_cost_basis": "185.00",
+      "current_yield": null
+    }
+  }
+}
