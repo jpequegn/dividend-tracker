@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
 
+mod models;
+
 #[derive(Parser)]
 #[command(name = "dividend-tracker")]
 #[command(about = "A CLI tool for tracking dividend payments and portfolio performance")]
