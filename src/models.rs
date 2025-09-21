@@ -227,12 +227,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Symbol cannot be empty")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Symbol cannot be empty"));
     }
 
     #[test]
@@ -248,12 +246,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Amount per share must be positive")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Amount per share must be positive"));
     }
 
     #[test]
@@ -269,12 +265,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Pay date cannot be before ex-dividend date")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Pay date cannot be before ex-dividend date"));
     }
 
     #[test]
@@ -302,12 +296,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Shares must be positive")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Shares must be positive"));
     }
 
     #[test]
@@ -320,12 +312,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Current yield cannot be negative")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Current yield cannot be negative"));
     }
 
     #[test]

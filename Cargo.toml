@@ -1,7 +1,7 @@
 [package]
 name = "dividend-tracker"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 # CLI argument parsing
@@ -22,3 +22,14 @@ rust_decimal_macros = "1.33"
 colored = "2.0"
 # Table formatting
 tabled = "0.15"
+# HTTP client for API calls
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+# Progress bars
+indicatif = "0.17"
+# Configuration management
+config = "0.14"
+toml = "0.8"
+# Directory management
+dirs = "5.0"
