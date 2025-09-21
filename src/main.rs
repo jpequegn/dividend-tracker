@@ -2,10 +2,14 @@ use anyhow::{anyhow, Result};
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use colored::*;
+use csv;
 use indicatif::{ProgressBar, ProgressStyle};
+use rust_decimal::Decimal;
+use std::str::FromStr;
 
 mod api;
 mod config;
+mod holdings;
 mod models;
 
 #[derive(Parser)]
@@ -59,6 +63,11 @@ enum Commands {
         #[arg(short, long, default_value = "dividends.csv")]
         output: String,
     },
+    /// Manage stock holdings in your portfolio
+    Holdings {
+        #[command(subcommand)]
+        command: HoldingsCommands,
+    },
     /// Fetch dividend data from Alpha Vantage API
     Fetch {
         /// Stock symbols to fetch (comma-separated for multiple)
@@ -96,6 +105,55 @@ enum Commands {
         /// Show current configuration
         #[arg(long)]
         show: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum HoldingsCommands {
+    /// Import holdings from CSV file
+    Import {
+        /// Path to CSV file with holdings data
+        file: String,
+    },
+    /// Add or update a holding in your portfolio
+    Add {
+        /// Stock symbol (e.g., AAPL, MSFT)
+        symbol: String,
+        /// Number of shares owned
+        #[arg(short, long)]
+        shares: String,
+        /// Average cost basis per share
+        #[arg(short = 'c', long)]
+        cost_basis: Option<String>,
+        /// Current dividend yield percentage
+        #[arg(short = 'y', long)]
+        yield_pct: Option<String>,
+    },
+    /// Remove a holding from your portfolio
+    Remove {
+        /// Stock symbol to remove
+        symbol: String,
+    },
+    /// List all holdings
+    List {
+        /// Sort holdings by field (symbol, shares, yield, value)
+        #[arg(long)]
+        sort_by: Option<String>,
+        /// Show holdings in descending order
+        #[arg(long)]
+        desc: bool,
+    },
+    /// Export holdings to CSV file
+    Export {
+        /// Output file path
+        #[arg(short, long, default_value = "holdings.csv")]
+        output: String,
+    },
+    /// Show portfolio holdings summary
+    Summary {
+        /// Include yield calculations
+        #[arg(long)]
+        include_yield: bool,
     },
 }
 
@@ -150,6 +208,9 @@ fn main() -> Result<()> {
             println!("Output file: {}", output.cyan());
             println!("{}", "Export functionality not yet implemented.".yellow());
         }
+        Some(Commands::Holdings { command }) => {
+            handle_holdings_command(command)?;
+        }
         Some(Commands::Fetch {
             symbols,
             from,
@@ -175,6 +236,54 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Handle holdings-related commands
+fn handle_holdings_command(command: HoldingsCommands) -> Result<()> {
+    match command {
+        HoldingsCommands::Import { file } => {
+            holdings::import_holdings(&file)?;
+        }
+        HoldingsCommands::Add {
+            symbol,
+            shares,
+            cost_basis,
+            yield_pct,
+        } => {
+            let shares_decimal = Decimal::from_str(&shares)
+                .map_err(|_| anyhow!("Invalid shares amount: {}", shares))?;
+
+            let cost_basis_decimal = if let Some(cb) = cost_basis {
+                Some(Decimal::from_str(&cb).map_err(|_| anyhow!("Invalid cost basis: {}", cb))?)
+            } else {
+                None
+            };
+
+            let yield_decimal = if let Some(y) = yield_pct {
+                Some(
+                    Decimal::from_str(&y)
+                        .map_err(|_| anyhow!("Invalid yield percentage: {}", y))?,
+                )
+            } else {
+                None
+            };
+
+            holdings::add_holding(&symbol, shares_decimal, cost_basis_decimal, yield_decimal)?;
+        }
+        HoldingsCommands::Remove { symbol } => {
+            holdings::remove_holding(&symbol)?;
+        }
+        HoldingsCommands::List { sort_by, desc } => {
+            holdings::list_holdings(sort_by.as_deref(), desc)?;
+        }
+        HoldingsCommands::Export { output } => {
+            holdings::export_holdings(&output)?;
+        }
+        HoldingsCommands::Summary { include_yield } => {
+            holdings::show_summary(include_yield)?;
+        }
+    }
     Ok(())
 }
 
