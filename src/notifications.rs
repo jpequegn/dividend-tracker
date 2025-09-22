@@ -9,8 +9,7 @@ use uuid::Uuid;
 use crate::api::AlphaVantageClient;
 use crate::holdings;
 use crate::models::{
-    AlertType, DividendAlert, DividendCalendarEntry, DividendFrequency,
-    DividendTracker, Holding,
+    AlertType, DividendAlert, DividendCalendarEntry, DividendFrequency, DividendTracker, Holding,
 };
 
 /// Data directory for storing notifications
@@ -80,7 +79,10 @@ impl NotificationManager {
 
     /// Fetch upcoming dividends for portfolio holdings
     pub fn fetch_upcoming_dividends(&mut self, client: &AlphaVantageClient) -> Result<()> {
-        println!("{}", "Fetching upcoming dividend calendar...".green().bold());
+        println!(
+            "{}",
+            "Fetching upcoming dividend calendar...".green().bold()
+        );
 
         // Load current holdings
         let tracker = holdings::load_holdings()?;
@@ -210,11 +212,8 @@ impl NotificationManager {
         }
 
         // Show summary
-        let total_estimated_income: Decimal = self
-            .alerts
-            .iter()
-            .filter_map(|a| a.estimated_income)
-            .sum();
+        let total_estimated_income: Decimal =
+            self.alerts.iter().filter_map(|a| a.estimated_income).sum();
 
         if total_estimated_income > Decimal::ZERO {
             println!(
@@ -263,11 +262,7 @@ impl NotificationManager {
                     } else {
                         String::new()
                     };
-                    println!(
-                        "  Amount: ${:.4} per share{}",
-                        amount,
-                        estimated_text
-                    );
+                    println!("  Amount: ${:.4} per share{}", amount, estimated_text);
                 }
 
                 if let Some(pay_date) = entry.pay_date {
@@ -344,10 +339,7 @@ impl NotificationManager {
                     }
                 }
                 if let Some(pay_date) = entry.pay_date {
-                    description.push_str(&format!(
-                        "\\nPay Date: {}",
-                        pay_date.format("%Y-%m-%d")
-                    ));
+                    description.push_str(&format!("\\nPay Date: {}", pay_date.format("%Y-%m-%d")));
                 }
                 ics_content.push_str(&format!("DESCRIPTION:{}\r\n", description));
 
@@ -396,8 +388,8 @@ fn estimate_next_dividend(
     let most_recent = historical.iter().max_by_key(|d| d.ex_date)?;
 
     // Calculate average dividend amount
-    let avg_amount: Decimal = historical.iter().map(|d| d.amount).sum::<Decimal>()
-        / Decimal::from(historical.len());
+    let avg_amount: Decimal =
+        historical.iter().map(|d| d.amount).sum::<Decimal>() / Decimal::from(historical.len());
 
     // Detect frequency (simplified - assumes quarterly if 3-5 dividends per year)
     let frequency = match historical.len() {

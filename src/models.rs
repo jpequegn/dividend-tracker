@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

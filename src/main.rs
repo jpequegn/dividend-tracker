@@ -1,8 +1,7 @@
 use anyhow::{anyhow, Result};
-use chrono::{Local, NaiveDate, Duration, Weekday};
+use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use clap::{Parser, Subcommand};
 use colored::*;
-use csv;
 use indicatif::{ProgressBar, ProgressStyle};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -287,7 +286,11 @@ fn main() -> Result<()> {
         Some(Commands::Alerts { generate, clear }) => {
             handle_alerts_command(generate, clear)?;
         }
-        Some(Commands::Calendar { update, days, export }) => {
+        Some(Commands::Calendar {
+            update,
+            days,
+            export,
+        }) => {
             handle_calendar_command(update, days, export)?;
         }
         Some(Commands::Data { command }) => {
@@ -319,11 +322,19 @@ fn handle_add_command(
     let ex_date_parsed = parse_dividend_date(&ex_date)?;
     let pay_date_parsed = parse_dividend_date(&pay_date)?;
 
-    let amount_decimal = Decimal::from_str(&amount)
-        .map_err(|_| anyhow!("Invalid amount format: {}. Use decimal format like 0.94", amount))?;
+    let amount_decimal = Decimal::from_str(&amount).map_err(|_| {
+        anyhow!(
+            "Invalid amount format: {}. Use decimal format like 0.94",
+            amount
+        )
+    })?;
 
-    let shares_decimal = Decimal::from_str(&shares)
-        .map_err(|_| anyhow!("Invalid shares format: {}. Use decimal format like 100", shares))?;
+    let shares_decimal = Decimal::from_str(&shares).map_err(|_| {
+        anyhow!(
+            "Invalid shares format: {}. Use decimal format like 100",
+            shares
+        )
+    })?;
 
     // Load persistence manager and existing data
     let persistence = PersistenceManager::new()?;
@@ -334,12 +345,22 @@ fn handle_add_command(
         if let Some(existing) = tracker.find_duplicate(&symbol, ex_date_parsed) {
             println!("{} Duplicate dividend found!", "⚠".yellow());
             println!("  Symbol: {}", existing.symbol.cyan());
-            println!("  Ex-date: {}", existing.ex_date.format("%Y-%m-%d").blue());
+            println!(
+                "  Ex-date: {}",
+                existing.ex_date.format("%Y-%m-%d").to_string().blue()
+            );
             println!("  Amount: ${:.4} per share", existing.amount_per_share);
             println!("  Total: ${:.2}", existing.total_amount);
             println!();
-            println!("Use {} to override duplicate protection.", "--force".yellow());
-            return Err(anyhow!("Duplicate dividend exists for {} on {}", symbol, ex_date_parsed));
+            println!(
+                "Use {} to override duplicate protection.",
+                "--force".yellow()
+            );
+            return Err(anyhow!(
+                "Duplicate dividend exists for {} on {}",
+                symbol,
+                ex_date_parsed
+            ));
         }
     }
 
@@ -349,13 +370,20 @@ fn handle_add_command(
         println!("  Holdings: {} shares", holding.shares);
 
         if shares_decimal > holding.shares {
-            println!("{} Warning: Dividend shares ({}) exceed current holdings ({})",
-                "⚠".yellow(), shares_decimal, holding.shares);
+            println!(
+                "{} Warning: Dividend shares ({}) exceed current holdings ({})",
+                "⚠".yellow(),
+                shares_decimal,
+                holding.shares
+            );
             println!("  This may indicate a stock split or updated holdings needed.");
         }
     } else {
-        println!("{} No holdings found for {}. Consider adding holdings first with 'holdings add'",
-            "ℹ".blue(), symbol.cyan());
+        println!(
+            "{} No holdings found for {}. Consider adding holdings first with 'holdings add'",
+            "ℹ".blue(),
+            symbol.cyan()
+        );
     }
 
     // Create dividend record
@@ -373,11 +401,20 @@ fn handle_add_command(
     println!();
     println!("{}", "💰 Dividend Details".green().bold());
     println!("  Symbol: {}", dividend.symbol.cyan());
-    println!("  Ex-date: {}", dividend.ex_date.format("%Y-%m-%d").blue());
-    println!("  Pay-date: {}", dividend.pay_date.format("%Y-%m-%d").blue());
+    println!(
+        "  Ex-date: {}",
+        dividend.ex_date.format("%Y-%m-%d").to_string().blue()
+    );
+    println!(
+        "  Pay-date: {}",
+        dividend.pay_date.format("%Y-%m-%d").to_string().blue()
+    );
     println!("  Amount per share: ${:.4}", dividend.amount_per_share);
     println!("  Shares owned: {}", dividend.shares_owned);
-    println!("  Total dividend: ${:.2}", dividend.total_amount.to_string().green());
+    println!(
+        "  Total dividend: ${:.2}",
+        dividend.total_amount.to_string().green()
+    );
 
     // Add to tracker and save
     tracker.add_dividend(dividend);
@@ -634,8 +671,14 @@ fn parse_dividend_date(date_str: &str) -> Result<NaiveDate> {
 /// Get the next occurrence of a specific weekday
 fn next_weekday(from_date: NaiveDate, target_weekday: Weekday) -> NaiveDate {
     let current_weekday = from_date.weekday();
-    let days_until_target = (target_weekday.num_days_from_monday() as i64 + 7 - current_weekday.num_days_from_monday() as i64) % 7;
-    let days_to_add = if days_until_target == 0 { 7 } else { days_until_target };
+    let days_until_target = (target_weekday.num_days_from_monday() as i64 + 7
+        - current_weekday.num_days_from_monday() as i64)
+        % 7;
+    let days_to_add = if days_until_target == 0 {
+        7
+    } else {
+        days_until_target
+    };
     from_date + Duration::days(days_to_add)
 }
 
@@ -788,7 +831,10 @@ fn handle_data_command(command: DataCommands) -> Result<()> {
                         persistence.export_holdings_to_csv(holdings_path)?;
 
                         println!("{} Data exported to:", "✓".green());
-                        println!("  Dividends: {}", dividends_path.display().to_string().cyan());
+                        println!(
+                            "  Dividends: {}",
+                            dividends_path.display().to_string().cyan()
+                        );
                         println!("  Holdings: {}", holdings_path.display().to_string().cyan());
                     } else {
                         let output_filename = format!("{}.json", output);
