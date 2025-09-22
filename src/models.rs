@@ -182,6 +182,22 @@ impl DividendTracker {
             .map(|div| div.total_amount)
             .sum()
     }
+
+    /// Check if a dividend with the same symbol and ex-date already exists
+    pub fn has_duplicate(&self, symbol: &str, ex_date: NaiveDate) -> bool {
+        let symbol = symbol.trim().to_uppercase();
+        self.dividends
+            .iter()
+            .any(|div| div.symbol == symbol && div.ex_date == ex_date)
+    }
+
+    /// Find existing dividend with same symbol and ex-date
+    pub fn find_duplicate(&self, symbol: &str, ex_date: NaiveDate) -> Option<&Dividend> {
+        let symbol = symbol.trim().to_uppercase();
+        self.dividends
+            .iter()
+            .find(|div| div.symbol == symbol && div.ex_date == ex_date)
+    }
 }
 
 impl Default for DividendTracker {
