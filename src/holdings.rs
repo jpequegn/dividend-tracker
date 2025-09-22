@@ -3,12 +3,12 @@ use colored::*;
 use csv::{Reader, Writer};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use tabled::{Table, Tabled};
 
 use crate::models::{DividendTracker, Holding};
+use crate::persistence::PersistenceManager;
 
 /// CSV record for holdings import/export
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,38 +19,16 @@ struct HoldingRecord {
     current_yield: Option<String>,
 }
 
-/// Data directory for storing holdings
-const DATA_DIR: &str = "data";
-const HOLDINGS_FILE: &str = "holdings.json";
-
-/// Get the path to the holdings data file
-fn get_holdings_file_path() -> Result<std::path::PathBuf> {
-    let data_dir = Path::new(DATA_DIR);
-    if !data_dir.exists() {
-        fs::create_dir_all(data_dir)?;
-    }
-    Ok(data_dir.join(HOLDINGS_FILE))
-}
-
 /// Load existing holdings from the data file
 pub fn load_holdings() -> Result<DividendTracker> {
-    let holdings_path = get_holdings_file_path()?;
-
-    if holdings_path.exists() {
-        let contents = fs::read_to_string(&holdings_path)?;
-        let tracker: DividendTracker = serde_json::from_str(&contents)?;
-        Ok(tracker)
-    } else {
-        Ok(DividendTracker::new())
-    }
+    let persistence = PersistenceManager::new()?;
+    persistence.load()
 }
 
 /// Save holdings to the data file
 fn save_holdings(tracker: &DividendTracker) -> Result<()> {
-    let holdings_path = get_holdings_file_path()?;
-    let contents = serde_json::to_string_pretty(tracker)?;
-    fs::write(holdings_path, contents)?;
-    Ok(())
+    let persistence = PersistenceManager::new()?;
+    persistence.save(tracker)
 }
 
 /// Import holdings from a CSV file

@@ -12,6 +12,9 @@ mod config;
 mod holdings;
 mod models;
 mod notifications;
+mod persistence;
+
+use persistence::PersistenceManager;
 
 #[derive(Parser)]
 #[command(name = "dividend-tracker")]
@@ -128,6 +131,11 @@ enum Commands {
         #[arg(long)]
         export: Option<String>,
     },
+    /// Data management commands
+    Data {
+        #[command(subcommand)]
+        command: DataCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -176,6 +184,31 @@ enum HoldingsCommands {
         /// Include yield calculations
         #[arg(long)]
         include_yield: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DataCommands {
+    /// Export data to different formats
+    Export {
+        /// Export format (csv, json)
+        #[arg(short, long, default_value = "csv")]
+        format: String,
+        /// Output file path
+        #[arg(short, long, default_value = "dividend_export")]
+        output: String,
+        /// Export type (dividends, holdings, all)
+        #[arg(short, long, default_value = "all")]
+        data_type: String,
+    },
+    /// Show data statistics and backup information
+    Stats,
+    /// Backup current data
+    Backup,
+    /// Load data from backup
+    Load {
+        /// Backup file to load from
+        file: String,
     },
 }
 
@@ -257,6 +290,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Calendar { update, days, export }) => {
             handle_calendar_command(update, days, export)?;
+        }
+        Some(Commands::Data { command }) => {
+            handle_data_command(command)?;
         }
         None => {
             println!("{}", "Dividend Tracker CLI".green().bold());
@@ -573,6 +609,130 @@ fn handle_calendar_command(update: bool, days: Option<i64>, export: Option<Strin
 
     // Show calendar
     manager.show_calendar(days)?;
+
+    Ok(())
+}
+
+/// Handle data management commands
+fn handle_data_command(command: DataCommands) -> Result<()> {
+    match command {
+        DataCommands::Export {
+            format,
+            output,
+            data_type,
+        } => {
+            let persistence = PersistenceManager::new()?;
+
+            match data_type.as_str() {
+                "dividends" => {
+                    let output_filename = if format == "csv" {
+                        format!("{}.csv", output)
+                    } else {
+                        format!("{}.json", output)
+                    };
+                    let output_path = std::path::Path::new(&output_filename);
+
+                    if format == "csv" {
+                        persistence.export_to_csv(output_path)?;
+                        println!(
+                            "{} Dividends exported to {}",
+                            "✓".green(),
+                            output_path.display().to_string().cyan()
+                        );
+                    } else {
+                        persistence.export_to_json(output_path)?;
+                        println!(
+                            "{} All data exported to {}",
+                            "✓".green(),
+                            output_path.display().to_string().cyan()
+                        );
+                    }
+                }
+                "holdings" => {
+                    let output_filename = format!("{}_holdings.csv", output);
+                    let output_path = std::path::Path::new(&output_filename);
+                    persistence.export_holdings_to_csv(output_path)?;
+                    println!(
+                        "{} Holdings exported to {}",
+                        "✓".green(),
+                        output_path.display().to_string().cyan()
+                    );
+                }
+                "all" | _ => {
+                    if format == "csv" {
+                        // Export both dividends and holdings as separate CSV files
+                        let dividends_filename = format!("{}_dividends.csv", output);
+                        let holdings_filename = format!("{}_holdings.csv", output);
+                        let dividends_path = std::path::Path::new(&dividends_filename);
+                        let holdings_path = std::path::Path::new(&holdings_filename);
+
+                        persistence.export_to_csv(dividends_path)?;
+                        persistence.export_holdings_to_csv(holdings_path)?;
+
+                        println!("{} Data exported to:", "✓".green());
+                        println!("  Dividends: {}", dividends_path.display().to_string().cyan());
+                        println!("  Holdings: {}", holdings_path.display().to_string().cyan());
+                    } else {
+                        let output_filename = format!("{}.json", output);
+                        let output_path = std::path::Path::new(&output_filename);
+                        persistence.export_to_json(output_path)?;
+                        println!(
+                            "{} All data exported to {}",
+                            "✓".green(),
+                            output_path.display().to_string().cyan()
+                        );
+                    }
+                }
+            }
+        }
+        DataCommands::Stats => {
+            let persistence = PersistenceManager::new()?;
+            let stats = persistence.get_stats()?;
+
+            println!("{}", "Data Statistics".green().bold());
+            println!();
+            println!(
+                "📂 {} {}",
+                "Data Directory:".bright_blue(),
+                stats.data_directory.display().to_string().cyan()
+            );
+            println!(
+                "💰 {} {}",
+                "Dividend Records:".bright_blue(),
+                stats.dividend_count.to_string().cyan()
+            );
+            println!(
+                "📊 {} {}",
+                "Holdings:".bright_blue(),
+                stats.holding_count.to_string().cyan()
+            );
+            println!(
+                "💾 {} {} bytes",
+                "Total Data Size:".bright_blue(),
+                stats.total_size_bytes.to_string().cyan()
+            );
+            println!(
+                "🔄 {} {}",
+                "Backup Files:".bright_blue(),
+                stats.backup_count.to_string().cyan()
+            );
+        }
+        DataCommands::Backup => {
+            println!("{}", "Creating manual backup...".green());
+            let persistence = PersistenceManager::new()?;
+
+            // Load and save to force a backup
+            let tracker = persistence.load()?;
+            persistence.save(&tracker)?;
+
+            println!("{} Manual backup created successfully!", "✓".green());
+        }
+        DataCommands::Load { file } => {
+            println!("{}", "Load functionality not yet implemented.".yellow());
+            println!("Would load data from: {}", file.cyan());
+            println!("This feature will be added in a future update.");
+        }
+    }
 
     Ok(())
 }
