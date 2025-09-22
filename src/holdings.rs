@@ -33,7 +33,7 @@ fn get_holdings_file_path() -> Result<std::path::PathBuf> {
 }
 
 /// Load existing holdings from the data file
-fn load_holdings() -> Result<DividendTracker> {
+pub fn load_holdings() -> Result<DividendTracker> {
     let holdings_path = get_holdings_file_path()?;
 
     if holdings_path.exists() {
