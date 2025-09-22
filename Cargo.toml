@@ -35,3 +35,5 @@ toml = "0.8"
 dirs = "5.0"
 # UUID generation for calendar
 uuid = { version = "1.6", features = ["v4"] }
+# Temporary files for atomic writes
+tempfile = "3.8"
