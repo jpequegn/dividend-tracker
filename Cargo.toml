@@ -2,6 +2,12 @@
 name = "dividend-tracker"
 version = "0.1.0"
 edition = "2021"
+authors = ["Dividend Tracker Team"]
+description = "A comprehensive CLI tool for tracking dividend payments, managing stock holdings, and analyzing portfolio performance"
+license = "MIT"
+repository = "https://github.com/jpequegn/dividend-tracker"
+keywords = ["finance", "dividends", "portfolio", "stocks", "cli"]
+categories = ["command-line-utilities", "finance"]
 
 [dependencies]
 # CLI argument parsing

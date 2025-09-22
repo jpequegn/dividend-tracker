@@ -446,6 +446,9 @@ impl PersistenceManager {
 
     /// Get statistics about the persisted data
     pub fn get_stats(&self) -> Result<DataStats> {
+        // Ensure directories exist before accessing them
+        self.ensure_directories()?;
+
         let tracker = self.load()?;
 
         let dividends_file = self.dividends_file();
