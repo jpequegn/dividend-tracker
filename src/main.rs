@@ -16,11 +16,93 @@ mod persistence;
 
 use persistence::PersistenceManager;
 
+/// Global CLI configuration passed to all command handlers
+#[derive(Clone)]
+pub struct CliConfig {
+    pub data_dir: Option<String>,
+    pub verbose: bool,
+    pub quiet: bool,
+}
+
+impl CliConfig {
+    /// Create a PersistenceManager with the configured data directory
+    pub fn create_persistence_manager(&self) -> Result<PersistenceManager> {
+        if let Some(ref data_dir) = self.data_dir {
+            Ok(PersistenceManager::with_custom_path(data_dir))
+        } else {
+            PersistenceManager::new()
+        }
+    }
+
+    /// Print message respecting verbose/quiet flags
+    pub fn print(&self, message: &str) {
+        if !self.quiet {
+            println!("{}", message);
+        }
+    }
+
+    /// Print verbose message only in verbose mode
+    pub fn print_verbose(&self, message: &str) {
+        if self.verbose && !self.quiet {
+            println!("🔧 {}", message);
+        }
+    }
+
+    /// Print error message (always shown unless quiet)
+    pub fn print_error(&self, message: &str) {
+        if !self.quiet {
+            eprintln!("❌ {}", message);
+        }
+    }
+
+    /// Print success message (always shown unless quiet)
+    pub fn print_success(&self, message: &str) {
+        if !self.quiet {
+            println!("✅ {}", message);
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "dividend-tracker")]
-#[command(about = "A CLI tool for tracking dividend payments and portfolio performance")]
-#[command(version = "0.1.0")]
+#[command(about = "A comprehensive CLI tool for tracking dividend payments, managing stock holdings, and analyzing portfolio performance")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(long_about = "
+dividend-tracker helps you track dividend payments, manage stock holdings,
+and analyze your portfolio performance. It supports importing data from CSV files,
+fetching real-time data from APIs, and exporting reports in multiple formats.
+
+Data is stored securely in JSON format with automatic backups.
+
+EXAMPLES:
+    # Add a dividend payment
+    dividend-tracker add AAPL --amount 0.94 --shares 100 --date 2024-02-15
+
+    # List all dividends for a specific year
+    dividend-tracker list --year 2024
+
+    # Add a stock holding
+    dividend-tracker holdings add MSFT --shares 50 --cost-basis 150.00
+
+    # Export data to CSV
+    dividend-tracker data export --format csv --output my_portfolio
+
+    # Show portfolio summary
+    dividend-tracker summary --year 2024
+")]
 struct Cli {
+    /// Custom data directory path (default: ~/.dividend-tracker)
+    #[arg(long, global = true, help = "Specify custom data directory")]
+    data_dir: Option<String>,
+
+    /// Enable verbose output
+    #[arg(short = 'v', long, global = true, help = "Show detailed output")]
+    verbose: bool,
+
+    /// Enable quiet mode (minimal output)
+    #[arg(short = 'q', long, global = true, help = "Show minimal output")]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -215,6 +297,23 @@ enum DataCommands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Create global CLI configuration
+    let config = CliConfig {
+        data_dir: cli.data_dir.clone(),
+        verbose: cli.verbose,
+        quiet: cli.quiet,
+    };
+
+    // Show verbose information about configuration
+    if config.verbose {
+        config.print_verbose("Starting dividend-tracker with configuration:");
+        if let Some(ref data_dir) = config.data_dir {
+            config.print_verbose(&format!("Data directory: {}", data_dir));
+        } else {
+            config.print_verbose("Data directory: ~/.dividend-tracker (default)");
+        }
+    }
+
     match cli.command {
         Some(Commands::Add {
             symbol,
@@ -292,7 +391,7 @@ fn main() -> Result<()> {
             handle_calendar_command(update, days, export)?;
         }
         Some(Commands::Data { command }) => {
-            handle_data_command(command)?;
+            handle_data_command(command, &config)?;
         }
         None => {
             println!("{}", "Dividend Tracker CLI".green().bold());
@@ -614,14 +713,15 @@ fn handle_calendar_command(update: bool, days: Option<i64>, export: Option<Strin
 }
 
 /// Handle data management commands
-fn handle_data_command(command: DataCommands) -> Result<()> {
+fn handle_data_command(command: DataCommands, config: &CliConfig) -> Result<()> {
     match command {
         DataCommands::Export {
             format,
             output,
             data_type,
         } => {
-            let persistence = PersistenceManager::new()?;
+            config.print_verbose("Creating persistence manager for data export");
+            let persistence = config.create_persistence_manager()?;
 
             match data_type.as_str() {
                 "dividends" => {
@@ -686,51 +786,57 @@ fn handle_data_command(command: DataCommands) -> Result<()> {
             }
         }
         DataCommands::Stats => {
-            let persistence = PersistenceManager::new()?;
+            config.print_verbose("Loading data statistics");
+            let persistence = config.create_persistence_manager()?;
             let stats = persistence.get_stats()?;
 
-            println!("{}", "Data Statistics".green().bold());
-            println!();
-            println!(
-                "📂 {} {}",
-                "Data Directory:".bright_blue(),
-                stats.data_directory.display().to_string().cyan()
-            );
-            println!(
-                "💰 {} {}",
-                "Dividend Records:".bright_blue(),
-                stats.dividend_count.to_string().cyan()
-            );
-            println!(
-                "📊 {} {}",
-                "Holdings:".bright_blue(),
-                stats.holding_count.to_string().cyan()
-            );
-            println!(
-                "💾 {} {} bytes",
-                "Total Data Size:".bright_blue(),
-                stats.total_size_bytes.to_string().cyan()
-            );
-            println!(
-                "🔄 {} {}",
-                "Backup Files:".bright_blue(),
-                stats.backup_count.to_string().cyan()
-            );
+            config.print(&format!("{}", "Data Statistics".green().bold()));
+            if !config.quiet {
+                println!();
+                println!(
+                    "📂 {} {}",
+                    "Data Directory:".bright_blue(),
+                    stats.data_directory.display().to_string().cyan()
+                );
+                println!(
+                    "💰 {} {}",
+                    "Dividend Records:".bright_blue(),
+                    stats.dividend_count.to_string().cyan()
+                );
+                println!(
+                    "📊 {} {}",
+                    "Holdings:".bright_blue(),
+                    stats.holding_count.to_string().cyan()
+                );
+                println!(
+                    "💾 {} {} bytes",
+                    "Total Data Size:".bright_blue(),
+                    stats.total_size_bytes.to_string().cyan()
+                );
+                println!(
+                    "🔄 {} {}",
+                    "Backup Files:".bright_blue(),
+                    stats.backup_count.to_string().cyan()
+                );
+            }
         }
         DataCommands::Backup => {
-            println!("{}", "Creating manual backup...".green());
-            let persistence = PersistenceManager::new()?;
+            config.print("Creating manual backup...");
+            config.print_verbose("Initializing persistence manager for backup");
+            let persistence = config.create_persistence_manager()?;
 
             // Load and save to force a backup
+            config.print_verbose("Loading current data");
             let tracker = persistence.load()?;
+            config.print_verbose("Saving data to create backup");
             persistence.save(&tracker)?;
 
-            println!("{} Manual backup created successfully!", "✓".green());
+            config.print_success("Manual backup created successfully!");
         }
         DataCommands::Load { file } => {
-            println!("{}", "Load functionality not yet implemented.".yellow());
-            println!("Would load data from: {}", file.cyan());
-            println!("This feature will be added in a future update.");
+            config.print(&format!("{}", "Load functionality not yet implemented.".yellow()));
+            config.print(&format!("Would load data from: {}", file.cyan()));
+            config.print("This feature will be added in a future update.");
         }
     }
 
