@@ -33,3 +33,5 @@ config = "0.14"
 toml = "0.8"
 # Directory management
 dirs = "5.0"
+# UUID generation for calendar
+uuid = { version = "1.6", features = ["v4"] }

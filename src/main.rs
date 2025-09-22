@@ -11,6 +11,7 @@ mod api;
 mod config;
 mod holdings;
 mod models;
+mod notifications;
 
 #[derive(Parser)]
 #[command(name = "dividend-tracker")]
@@ -105,6 +106,27 @@ enum Commands {
         /// Show current configuration
         #[arg(long)]
         show: bool,
+    },
+    /// Show dividend alerts for upcoming ex-dates
+    Alerts {
+        /// Generate new alerts
+        #[arg(long)]
+        generate: bool,
+        /// Clear existing alerts
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Display dividend calendar
+    Calendar {
+        /// Fetch/update calendar for portfolio holdings
+        #[arg(long)]
+        update: bool,
+        /// Number of days to show (default: 90)
+        #[arg(long, short = 'd')]
+        days: Option<i64>,
+        /// Export calendar to ICS file
+        #[arg(long)]
+        export: Option<String>,
     },
 }
 
@@ -229,6 +251,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::Configure { api_key, show }) => {
             handle_configure_command(api_key, show)?;
+        }
+        Some(Commands::Alerts { generate, clear }) => {
+            handle_alerts_command(generate, clear)?;
+        }
+        Some(Commands::Calendar { update, days, export }) => {
+            handle_calendar_command(update, days, export)?;
         }
         None => {
             println!("{}", "Dividend Tracker CLI".green().bold());
@@ -497,4 +525,54 @@ fn load_symbols_from_portfolio(file_path: &str) -> Result<Vec<String>> {
     }
 
     Ok(symbols)
+}
+
+/// Handle alerts command
+fn handle_alerts_command(generate: bool, clear: bool) -> Result<()> {
+    let mut manager = notifications::NotificationManager::load()?;
+
+    if clear {
+        manager.alerts.clear();
+        manager.save()?;
+        println!("{}", "Alerts cleared successfully!".green());
+        return Ok(());
+    }
+
+    if generate {
+        manager.generate_alerts()?;
+        println!("{}", "Alerts generated successfully!".green());
+    }
+
+    // Show current alerts
+    manager.show_alerts()?;
+
+    Ok(())
+}
+
+/// Handle calendar command
+fn handle_calendar_command(update: bool, days: Option<i64>, export: Option<String>) -> Result<()> {
+    let mut manager = notifications::NotificationManager::load()?;
+
+    if update {
+        // Load configuration
+        let config = config::Config::load()?;
+        let api_key = config.get_api_key()?;
+
+        // Create API client
+        let client = api::AlphaVantageClient::new(api_key)?;
+
+        // Fetch upcoming dividends
+        manager.fetch_upcoming_dividends(&client)?;
+    }
+
+    // Export to ICS if requested
+    if let Some(output_path) = export {
+        manager.export_to_ics(&output_path)?;
+        return Ok(());
+    }
+
+    // Show calendar
+    manager.show_calendar(days)?;
+
+    Ok(())
 }

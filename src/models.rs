@@ -190,6 +190,114 @@ impl Default for DividendTracker {
     }
 }
 
+/// Represents an upcoming dividend calendar entry
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DividendCalendarEntry {
+    /// Stock symbol
+    pub symbol: String,
+    /// Company name
+    pub company_name: Option<String>,
+    /// Ex-dividend date
+    pub ex_date: NaiveDate,
+    /// Payment date (estimated or confirmed)
+    pub pay_date: Option<NaiveDate>,
+    /// Dividend amount per share (estimated or confirmed)
+    pub estimated_amount: Option<Decimal>,
+    /// Whether this is an estimate based on historical data
+    pub is_estimated: bool,
+    /// Frequency of dividend payments (quarterly, monthly, annual)
+    pub frequency: Option<DividendFrequency>,
+    /// Days until ex-date
+    pub days_until_ex: i64,
+}
+
+/// Dividend payment frequency
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DividendFrequency {
+    Monthly,
+    Quarterly,
+    SemiAnnual,
+    Annual,
+    Irregular,
+}
+
+/// Represents a dividend notification alert
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DividendAlert {
+    /// Stock symbol
+    pub symbol: String,
+    /// Alert type
+    pub alert_type: AlertType,
+    /// Ex-dividend date
+    pub ex_date: NaiveDate,
+    /// Estimated dividend amount
+    pub estimated_amount: Option<Decimal>,
+    /// Number of shares owned
+    pub shares_owned: Option<Decimal>,
+    /// Estimated income from this dividend
+    pub estimated_income: Option<Decimal>,
+    /// Alert message
+    pub message: String,
+}
+
+/// Types of dividend alerts
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AlertType {
+    /// Ex-date is tomorrow
+    ExDateTomorrow,
+    /// Ex-date is within a week
+    ExDateThisWeek,
+    /// Ex-date is within a month
+    ExDateThisMonth,
+    /// New dividend announced
+    NewDividendAnnounced,
+    /// Dividend increase
+    DividendIncrease,
+    /// Dividend cut
+    DividendCut,
+}
+
+impl DividendCalendarEntry {
+    /// Create a new calendar entry
+    pub fn new(
+        symbol: String,
+        company_name: Option<String>,
+        ex_date: NaiveDate,
+        pay_date: Option<NaiveDate>,
+        estimated_amount: Option<Decimal>,
+        is_estimated: bool,
+    ) -> Self {
+        let today = chrono::Local::now().naive_local().date();
+        let days_until_ex = (ex_date - today).num_days();
+
+        DividendCalendarEntry {
+            symbol: symbol.trim().to_uppercase(),
+            company_name,
+            ex_date,
+            pay_date,
+            estimated_amount,
+            is_estimated,
+            frequency: None,
+            days_until_ex,
+        }
+    }
+
+    /// Check if ex-date is upcoming (within specified days)
+    pub fn is_upcoming(&self, days: i64) -> bool {
+        self.days_until_ex >= 0 && self.days_until_ex <= days
+    }
+
+    /// Get alert type based on days until ex-date
+    pub fn get_alert_type(&self) -> Option<AlertType> {
+        match self.days_until_ex {
+            0..=1 => Some(AlertType::ExDateTomorrow),
+            2..=7 => Some(AlertType::ExDateThisWeek),
+            8..=30 => Some(AlertType::ExDateThisMonth),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
