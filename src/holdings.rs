@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use colored::*;
 use csv::{Reader, Writer};
 use rust_decimal::Decimal;

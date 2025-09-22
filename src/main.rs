@@ -1,8 +1,7 @@
 use anyhow::{anyhow, Result};
-use chrono::NaiveDate;
+use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use clap::{Parser, Subcommand};
 use colored::*;
-use csv;
 use indicatif::{ProgressBar, ProgressStyle};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -113,15 +112,21 @@ enum Commands {
     Add {
         /// Stock symbol (e.g., AAPL, MSFT)
         symbol: String,
+        /// Ex-dividend date (YYYY-MM-DD, 'tomorrow', 'next friday', etc.)
+        #[arg(long)]
+        ex_date: String,
+        /// Payment date (YYYY-MM-DD, 'tomorrow', 'next friday', etc.)
+        #[arg(long)]
+        pay_date: String,
         /// Dividend amount per share
         #[arg(short, long)]
         amount: String,
-        /// Payment date (YYYY-MM-DD format)
+        /// Number of shares owned
         #[arg(short, long)]
-        date: Option<String>,
-        /// Number of shares
-        #[arg(short, long)]
-        shares: Option<String>,
+        shares: String,
+        /// Force adding even if duplicate (same symbol + ex-date) exists
+        #[arg(long)]
+        force: bool,
     },
     /// List dividend payments
     List {
@@ -317,20 +322,13 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Add {
             symbol,
+            ex_date,
+            pay_date,
             amount,
-            date,
             shares,
+            force,
         }) => {
-            println!("{}", "Adding dividend record...".green());
-            println!("Symbol: {}", symbol.cyan());
-            println!("Amount: ${}", amount.yellow());
-            if let Some(date) = date {
-                println!("Date: {}", date.blue());
-            }
-            if let Some(shares) = shares {
-                println!("Shares: {}", shares.magenta());
-            }
-            println!("{}", "✓ Dividend record added successfully!".green());
+            handle_add_command(symbol, ex_date, pay_date, amount, shares, force)?;
         }
         Some(Commands::List { symbol, year }) => {
             println!("{}", "Listing dividend payments...".green());
@@ -387,7 +385,11 @@ fn main() -> Result<()> {
         Some(Commands::Alerts { generate, clear }) => {
             handle_alerts_command(generate, clear)?;
         }
-        Some(Commands::Calendar { update, days, export }) => {
+        Some(Commands::Calendar {
+            update,
+            days,
+            export,
+        }) => {
             handle_calendar_command(update, days, export)?;
         }
         Some(Commands::Data { command }) => {
@@ -398,6 +400,127 @@ fn main() -> Result<()> {
             println!("Use --help to see available commands");
         }
     }
+
+    Ok(())
+}
+
+/// Handle adding a new dividend record
+fn handle_add_command(
+    symbol: String,
+    ex_date: String,
+    pay_date: String,
+    amount: String,
+    shares: String,
+    force: bool,
+) -> Result<()> {
+    use crate::models::{Dividend, DividendType};
+
+    println!("{}", "Adding dividend record...".green().bold());
+
+    // Parse and validate inputs
+    let ex_date_parsed = parse_dividend_date(&ex_date)?;
+    let pay_date_parsed = parse_dividend_date(&pay_date)?;
+
+    let amount_decimal = Decimal::from_str(&amount).map_err(|_| {
+        anyhow!(
+            "Invalid amount format: {}. Use decimal format like 0.94",
+            amount
+        )
+    })?;
+
+    let shares_decimal = Decimal::from_str(&shares).map_err(|_| {
+        anyhow!(
+            "Invalid shares format: {}. Use decimal format like 100",
+            shares
+        )
+    })?;
+
+    // Load persistence manager and existing data
+    let persistence = PersistenceManager::new()?;
+    let mut tracker = persistence.load()?;
+
+    // Check for duplicates unless force flag is used
+    if !force && tracker.has_duplicate(&symbol, ex_date_parsed) {
+        if let Some(existing) = tracker.find_duplicate(&symbol, ex_date_parsed) {
+            println!("{} Duplicate dividend found!", "⚠".yellow());
+            println!("  Symbol: {}", existing.symbol.cyan());
+            println!(
+                "  Ex-date: {}",
+                existing.ex_date.format("%Y-%m-%d").to_string().blue()
+            );
+            println!("  Amount: ${:.4} per share", existing.amount_per_share);
+            println!("  Total: ${:.2}", existing.total_amount);
+            println!();
+            println!(
+                "Use {} to override duplicate protection.",
+                "--force".yellow()
+            );
+            return Err(anyhow!(
+                "Duplicate dividend exists for {} on {}",
+                symbol,
+                ex_date_parsed
+            ));
+        }
+    }
+
+    // Validate against holdings if available
+    if let Some(holding) = tracker.holdings.get(&symbol.trim().to_uppercase()) {
+        println!("📊 Validating against holdings for {}...", symbol.cyan());
+        println!("  Holdings: {} shares", holding.shares);
+
+        if shares_decimal > holding.shares {
+            println!(
+                "{} Warning: Dividend shares ({}) exceed current holdings ({})",
+                "⚠".yellow(),
+                shares_decimal,
+                holding.shares
+            );
+            println!("  This may indicate a stock split or updated holdings needed.");
+        }
+    } else {
+        println!(
+            "{} No holdings found for {}. Consider adding holdings first with 'holdings add'",
+            "ℹ".blue(),
+            symbol.cyan()
+        );
+    }
+
+    // Create dividend record
+    let dividend = Dividend::new(
+        symbol.clone(),
+        None, // company_name
+        ex_date_parsed,
+        pay_date_parsed,
+        amount_decimal,
+        shares_decimal,
+        DividendType::Regular,
+    )?;
+
+    // Display dividend details for confirmation
+    println!();
+    println!("{}", "💰 Dividend Details".green().bold());
+    println!("  Symbol: {}", dividend.symbol.cyan());
+    println!(
+        "  Ex-date: {}",
+        dividend.ex_date.format("%Y-%m-%d").to_string().blue()
+    );
+    println!(
+        "  Pay-date: {}",
+        dividend.pay_date.format("%Y-%m-%d").to_string().blue()
+    );
+    println!("  Amount per share: ${:.4}", dividend.amount_per_share);
+    println!("  Shares owned: {}", dividend.shares_owned);
+    println!(
+        "  Total dividend: ${:.2}",
+        dividend.total_amount.to_string().green()
+    );
+
+    // Add to tracker and save
+    tracker.add_dividend(dividend);
+    persistence.save(&tracker)?;
+
+    println!();
+    println!("{} Dividend record added successfully!", "✓".green());
 
     Ok(())
 }
@@ -620,6 +743,44 @@ fn handle_configure_command(api_key: Option<String>, show: bool) -> Result<()> {
     Ok(())
 }
 
+/// Parse natural language date strings like "tomorrow", "next friday", or standard YYYY-MM-DD format
+fn parse_dividend_date(date_str: &str) -> Result<NaiveDate> {
+    let date_str = date_str.trim().to_lowercase();
+    let today = Local::now().naive_local().date();
+
+    match date_str.as_str() {
+        "today" => Ok(today),
+        "tomorrow" => Ok(today + Duration::days(1)),
+        "yesterday" => Ok(today - Duration::days(1)),
+        "next monday" => Ok(next_weekday(today, Weekday::Mon)),
+        "next tuesday" => Ok(next_weekday(today, Weekday::Tue)),
+        "next wednesday" => Ok(next_weekday(today, Weekday::Wed)),
+        "next thursday" => Ok(next_weekday(today, Weekday::Thu)),
+        "next friday" => Ok(next_weekday(today, Weekday::Fri)),
+        "next saturday" => Ok(next_weekday(today, Weekday::Sat)),
+        "next sunday" => Ok(next_weekday(today, Weekday::Sun)),
+        _ => {
+            // Try to parse as standard date format (YYYY-MM-DD)
+            NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                .map_err(|_| anyhow!("Invalid date format. Use YYYY-MM-DD or natural language like 'tomorrow', 'next friday'"))
+        }
+    }
+}
+
+/// Get the next occurrence of a specific weekday
+fn next_weekday(from_date: NaiveDate, target_weekday: Weekday) -> NaiveDate {
+    let current_weekday = from_date.weekday();
+    let days_until_target = (target_weekday.num_days_from_monday() as i64 + 7
+        - current_weekday.num_days_from_monday() as i64)
+        % 7;
+    let days_to_add = if days_until_target == 0 {
+        7
+    } else {
+        days_until_target
+    };
+    from_date + Duration::days(days_to_add)
+}
+
 /// Parse date input from string or year
 fn parse_date_input(
     date_str: Option<String>,
@@ -770,7 +931,10 @@ fn handle_data_command(command: DataCommands, config: &CliConfig) -> Result<()> 
                         persistence.export_holdings_to_csv(holdings_path)?;
 
                         println!("{} Data exported to:", "✓".green());
-                        println!("  Dividends: {}", dividends_path.display().to_string().cyan());
+                        println!(
+                            "  Dividends: {}",
+                            dividends_path.display().to_string().cyan()
+                        );
                         println!("  Holdings: {}", holdings_path.display().to_string().cyan());
                     } else {
                         let output_filename = format!("{}.json", output);

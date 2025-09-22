@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-use crate::models::{DividendTracker, Dividend, Holding};
+use crate::models::{Dividend, DividendTracker, Holding};
 
 /// Schema version for data migration
 const SCHEMA_VERSION: u32 = 1;
@@ -157,22 +157,26 @@ impl PersistenceManager {
     /// Perform an atomic write to a file
     fn atomic_write(&self, path: &Path, content: &[u8]) -> Result<()> {
         // Create a temporary file in the same directory as the target
-        let parent = path.parent()
+        let parent = path
+            .parent()
             .ok_or_else(|| anyhow::anyhow!("File has no parent directory"))?;
 
-        let mut temp_file = NamedTempFile::new_in(parent)
-            .with_context(|| "Failed to create temporary file")?;
+        let mut temp_file =
+            NamedTempFile::new_in(parent).with_context(|| "Failed to create temporary file")?;
 
         // Write content to temporary file
-        temp_file.write_all(content)
+        temp_file
+            .write_all(content)
             .with_context(|| "Failed to write to temporary file")?;
 
         // Sync to ensure data is written to disk
-        temp_file.flush()
+        temp_file
+            .flush()
             .with_context(|| "Failed to flush temporary file")?;
 
         // Atomically rename temporary file to target
-        temp_file.persist(path)
+        temp_file
+            .persist(path)
             .with_context(|| format!("Failed to persist file to: {:?}", path))?;
 
         Ok(())
@@ -360,10 +364,12 @@ impl PersistenceManager {
             wtr.write_record(&[
                 symbol,
                 &holding.shares.to_string(),
-                &holding.avg_cost_basis
+                &holding
+                    .avg_cost_basis
                     .map(|cb| cb.to_string())
                     .unwrap_or_else(|| "".to_string()),
-                &holding.current_yield
+                &holding
+                    .current_yield
                     .map(|y| y.to_string())
                     .unwrap_or_else(|| "".to_string()),
             ])?;
@@ -428,8 +434,10 @@ impl PersistenceManager {
         // For now, we just update the version and return the data
 
         if data.schema_version < SCHEMA_VERSION {
-            eprintln!("Migrating data from schema version {} to {}",
-                     data.schema_version, SCHEMA_VERSION);
+            eprintln!(
+                "Migrating data from schema version {} to {}",
+                data.schema_version, SCHEMA_VERSION
+            );
 
             // Future migrations would go here
             // Example:
@@ -469,7 +477,8 @@ impl PersistenceManager {
         let backup_count = fs::read_dir(&self.backup_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.path().extension()
+                e.path()
+                    .extension()
                     .and_then(|ext| ext.to_str())
                     .map(|ext| ext == "bak")
                     .unwrap_or(false)
@@ -505,9 +514,9 @@ impl Default for PersistenceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-    use rust_decimal_macros::dec;
     use chrono::NaiveDate;
+    use rust_decimal_macros::dec;
+    use tempfile::TempDir;
 
     #[test]
     fn test_persistence_manager_creation() {
@@ -547,7 +556,8 @@ mod tests {
             dec!(0.94),
             dec!(100),
             crate::models::DividendType::Regular,
-        ).unwrap();
+        )
+        .unwrap();
         tracker.add_dividend(dividend.clone());
 
         // Add test holding
@@ -556,7 +566,8 @@ mod tests {
             dec!(100),
             Some(dec!(150.00)),
             Some(dec!(2.5)),
-        ).unwrap();
+        )
+        .unwrap();
         tracker.add_holding(holding.clone());
 
         // Save and load
