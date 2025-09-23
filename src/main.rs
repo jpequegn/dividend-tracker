@@ -15,6 +15,7 @@ mod models;
 mod notifications;
 mod persistence;
 mod projections;
+mod tax;
 
 use persistence::PersistenceManager;
 use projections::{GrowthScenario, ProjectionEngine, ProjectionMethod};
@@ -296,6 +297,11 @@ enum Commands {
         #[command(subcommand)]
         command: DataCommands,
     },
+    /// Tax reporting and analysis commands
+    Tax {
+        #[command(subcommand)]
+        command: TaxCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -344,6 +350,78 @@ enum HoldingsCommands {
         /// Include yield calculations
         #[arg(long)]
         include_yield: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaxCommands {
+    /// Generate annual tax summary for a specific year
+    Summary {
+        /// Tax year to analyze (defaults to current year)
+        #[arg(short, long)]
+        year: Option<i32>,
+        /// Include estimated tax calculations
+        #[arg(long)]
+        estimate: bool,
+        /// Filing status for tax estimates (single, married-jointly, married-separately, head-of-household)
+        #[arg(long)]
+        filing_status: Option<String>,
+        /// Income bracket for tax estimates (low, medium, high, very-high)
+        #[arg(long)]
+        income_bracket: Option<String>,
+        /// Export summary to CSV file
+        #[arg(long)]
+        export_csv: Option<String>,
+    },
+    /// Generate 1099-DIV style report
+    Report {
+        /// Tax year for the report (defaults to current year)
+        #[arg(short, long)]
+        year: Option<i32>,
+        /// Export report to CSV file
+        #[arg(long)]
+        export_csv: Option<String>,
+        /// Export report to JSON file
+        #[arg(long)]
+        export_json: Option<String>,
+    },
+    /// Calculate estimated taxes on dividend income
+    Estimate {
+        /// Tax year to analyze (defaults to current year)
+        #[arg(short, long)]
+        year: Option<i32>,
+        /// Filing status (single, married-jointly, married-separately, head-of-household)
+        #[arg(short, long, default_value = "single")]
+        filing_status: String,
+        /// Income bracket (low, medium, high, very-high)
+        #[arg(short, long, default_value = "medium")]
+        income_bracket: String,
+    },
+    /// Show tax lot breakdown (if cost basis tracking enabled)
+    Lots {
+        /// Tax year to analyze (defaults to current year)
+        #[arg(short, long)]
+        year: Option<i32>,
+        /// Filter by stock symbol
+        #[arg(short, long)]
+        symbol: Option<String>,
+        /// Export to CSV file
+        #[arg(long)]
+        export_csv: Option<String>,
+    },
+    /// Update tax classification for dividends
+    Classify {
+        /// Stock symbol to update
+        symbol: String,
+        /// Tax classification (qualified, non-qualified, return-of-capital, tax-free, foreign)
+        #[arg(short, long)]
+        classification: String,
+        /// Year to update (optional, updates all if not specified)
+        #[arg(short, long)]
+        year: Option<i32>,
+        /// Apply to all future dividends from this symbol
+        #[arg(long)]
+        apply_future: bool,
     },
 }
 
@@ -505,6 +583,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Data { command }) => {
             handle_data_command(command, &config)?;
+        }
+        Some(Commands::Tax { command }) => {
+            handle_tax_command(command)?;
         }
         None => {
             println!("{}", "Dividend Tracker CLI".green().bold());
@@ -2155,4 +2236,748 @@ fn display_projection_metadata(projection: &projections::DividendProjection) -> 
 
     println!();
     Ok(())
+}
+
+/// Handle tax-related commands
+fn handle_tax_command(command: TaxCommands) -> Result<()> {
+    use crate::tax::*;
+
+    match command {
+        TaxCommands::Summary {
+            year,
+            estimate,
+            filing_status,
+            income_bracket,
+            export_csv,
+        } => {
+            handle_tax_summary(year, estimate, filing_status, income_bracket, export_csv)?;
+        }
+        TaxCommands::Report {
+            year,
+            export_csv,
+            export_json,
+        } => {
+            handle_tax_report(year, export_csv, export_json)?;
+        }
+        TaxCommands::Estimate {
+            year,
+            filing_status,
+            income_bracket,
+        } => {
+            handle_tax_estimate(year, filing_status, income_bracket)?;
+        }
+        TaxCommands::Lots {
+            year,
+            symbol,
+            export_csv,
+        } => {
+            handle_tax_lots(year, symbol, export_csv)?;
+        }
+        TaxCommands::Classify {
+            symbol,
+            classification,
+            year,
+            apply_future,
+        } => {
+            handle_tax_classify(symbol, classification, year, apply_future)?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle tax summary command
+fn handle_tax_summary(
+    year: Option<i32>,
+    estimate: bool,
+    filing_status: Option<String>,
+    income_bracket: Option<String>,
+    export_csv: Option<String>,
+) -> Result<()> {
+    use crate::tax::*;
+    use chrono::Local;
+
+    println!("{}", "Tax Summary Report".green().bold());
+    println!();
+
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.dividends.is_empty() {
+        println!("{}", "No dividend records found.".yellow());
+        return Ok(());
+    }
+
+    let tax_year = year.unwrap_or_else(|| Local::now().year());
+
+    // Parse tax assumptions if estimate is requested
+    let tax_assumptions = if estimate {
+        let filing = parse_filing_status(filing_status.as_deref())?;
+        let bracket = parse_income_bracket(income_bracket.as_deref())?;
+        Some(TaxAssumptions {
+            filing_status: filing,
+            income_bracket: bracket,
+            tax_year,
+        })
+    } else {
+        None
+    };
+
+    // Generate tax summary
+    let summary = TaxAnalyzer::generate_tax_summary(&tracker, tax_year, tax_assumptions)?;
+
+    // Display the summary
+    display_tax_summary(&summary)?;
+
+    // Export if requested
+    if let Some(csv_path) = export_csv {
+        TaxAnalyzer::export_tax_summary_csv(&summary, &csv_path)?;
+        println!();
+        println!("{} Tax summary exported to {}", "✓".green(), csv_path.cyan());
+    }
+
+    Ok(())
+}
+
+/// Handle tax report (1099-DIV style) command
+fn handle_tax_report(
+    year: Option<i32>,
+    export_csv: Option<String>,
+    export_json: Option<String>,
+) -> Result<()> {
+    use crate::tax::*;
+    use chrono::Local;
+
+    println!("{}", "1099-DIV Style Tax Report".green().bold());
+    println!();
+
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.dividends.is_empty() {
+        println!("{}", "No dividend records found.".yellow());
+        return Ok(());
+    }
+
+    let tax_year = year.unwrap_or_else(|| Local::now().year());
+
+    // Generate 1099-DIV report
+    let report = TaxAnalyzer::generate_1099_div_report(&tracker, tax_year)?;
+
+    // Display the report
+    display_1099_div_report(&report)?;
+
+    // Export if requested
+    if let Some(csv_path) = export_csv {
+        TaxAnalyzer::export_1099_div_csv(&report, &csv_path)?;
+        println!();
+        println!("{} 1099-DIV report exported to {}", "✓".green(), csv_path.cyan());
+    }
+
+    if let Some(json_path) = export_json {
+        let json_str = serde_json::to_string_pretty(&report)?;
+        std::fs::write(&json_path, json_str)?;
+        println!();
+        println!("{} 1099-DIV report exported to {}", "✓".green(), json_path.cyan());
+    }
+
+    Ok(())
+}
+
+/// Handle tax estimate command
+fn handle_tax_estimate(
+    year: Option<i32>,
+    filing_status: String,
+    income_bracket: String,
+) -> Result<()> {
+    use crate::tax::*;
+    use chrono::Local;
+
+    println!("{}", "Tax Estimate Calculator".green().bold());
+    println!();
+
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.dividends.is_empty() {
+        println!("{}", "No dividend records found.".yellow());
+        return Ok(());
+    }
+
+    let tax_year = year.unwrap_or_else(|| Local::now().year());
+
+    // Parse tax assumptions
+    let filing = parse_filing_status(Some(&filing_status))?;
+    let bracket = parse_income_bracket(Some(&income_bracket))?;
+
+    let tax_assumptions = TaxAssumptions {
+        filing_status: filing,
+        income_bracket: bracket,
+        tax_year,
+    };
+
+    // Generate tax summary with estimates
+    let summary = TaxAnalyzer::generate_tax_summary(&tracker, tax_year, Some(tax_assumptions))?;
+
+    // Display estimate-focused view
+    display_tax_estimate(&summary)?;
+
+    Ok(())
+}
+
+/// Handle tax lots command
+fn handle_tax_lots(
+    year: Option<i32>,
+    symbol: Option<String>,
+    export_csv: Option<String>,
+) -> Result<()> {
+    use chrono::Local;
+
+    println!("{}", "Tax Lot Analysis".green().bold());
+    println!();
+
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.dividends.is_empty() {
+        println!("{}", "No dividend records found.".yellow());
+        return Ok(());
+    }
+
+    let tax_year = year.unwrap_or_else(|| Local::now().year());
+
+    // Generate tax summary to get tax lots
+    let summary = crate::tax::TaxAnalyzer::generate_tax_summary(&tracker, tax_year, None)?;
+
+    if summary.tax_lots.is_empty() {
+        println!("{}", "No tax lot information found. Add tax lot IDs to dividends for detailed tracking.".yellow());
+        return Ok(());
+    }
+
+    // Filter by symbol if requested
+    let filtered_lots: Vec<_> = if let Some(ref sym) = symbol {
+        summary.tax_lots.iter().filter(|lot| lot.symbol == *sym).collect()
+    } else {
+        summary.tax_lots.iter().collect()
+    };
+
+    // Display tax lots
+    display_tax_lots(&filtered_lots, symbol.as_deref())?;
+
+    // Export if requested
+    if let Some(csv_path) = export_csv {
+        export_tax_lots_csv(&filtered_lots, &csv_path)?;
+        println!();
+        println!("{} Tax lots exported to {}", "✓".green(), csv_path.cyan());
+    }
+
+    Ok(())
+}
+
+/// Handle tax classification command
+fn handle_tax_classify(
+    symbol: String,
+    classification: String,
+    year: Option<i32>,
+    apply_future: bool,
+) -> Result<()> {
+    use crate::models::TaxClassification;
+
+    println!("{}", "Update Tax Classification".green().bold());
+    println!();
+
+    // Parse classification
+    let tax_class = match classification.to_lowercase().as_str() {
+        "qualified" => TaxClassification::Qualified,
+        "non-qualified" | "nonqualified" => TaxClassification::NonQualified,
+        "return-of-capital" | "roc" => TaxClassification::ReturnOfCapital,
+        "tax-free" | "taxfree" => TaxClassification::TaxFree,
+        "foreign" => TaxClassification::Foreign,
+        "unknown" => TaxClassification::Unknown,
+        _ => return Err(anyhow!("Invalid classification. Use: qualified, non-qualified, return-of-capital, tax-free, foreign, unknown")),
+    };
+
+    let persistence = PersistenceManager::new()?;
+    let mut tracker = persistence.load()?;
+
+    let symbol_upper = symbol.to_uppercase();
+    let mut updated_count = 0;
+
+    // Update dividends
+    for dividend in &mut tracker.dividends {
+        if dividend.symbol == symbol_upper {
+            let should_update = if let Some(target_year) = year {
+                dividend.pay_date.year() == target_year
+            } else {
+                true
+            };
+
+            if should_update {
+                dividend.tax_classification = tax_class.clone();
+                updated_count += 1;
+            }
+        }
+    }
+
+    if updated_count == 0 {
+        println!("{}", format!("No dividend records found for {} in the specified period.", symbol_upper).yellow());
+        return Ok(());
+    }
+
+    // Save updated data
+    persistence.save(&tracker)?;
+
+    println!("{} Updated {} dividend records for {} to {:?}",
+             "✓".green(),
+             updated_count,
+             symbol_upper.cyan(),
+             tax_class);
+
+    if apply_future {
+        println!("{}", "Note: --apply-future flag noted. Future dividends will need to be manually classified.".yellow());
+        println!("Consider updating your data import process to automatically classify {} dividends.", symbol_upper);
+    }
+
+    Ok(())
+}
+
+/// Display tax summary
+fn display_tax_summary(summary: &crate::tax::TaxSummary) -> Result<()> {
+    use tabled::{Table, Tabled};
+    use colored::*;
+
+    println!("{} {}", "📊 Tax Summary for".blue().bold(), summary.tax_year.to_string().cyan().bold());
+    println!();
+
+    // Summary totals
+    println!("{}", "Total Income Breakdown".blue().bold());
+
+    #[derive(Tabled)]
+    struct IncomeSummary {
+        #[tabled(rename = "Category")]
+        category: String,
+        #[tabled(rename = "Amount")]
+        amount: String,
+        #[tabled(rename = "Percentage")]
+        percentage: String,
+    }
+
+    let mut income_data = vec![
+        IncomeSummary {
+            category: "Total Dividend Income".to_string(),
+            amount: format!("${:.2}", summary.total_dividend_income),
+            percentage: "100.0%".to_string(),
+        },
+        IncomeSummary {
+            category: "  Qualified Dividends".to_string(),
+            amount: format!("${:.2}", summary.qualified_dividends),
+            percentage: if summary.total_dividend_income > rust_decimal::Decimal::ZERO {
+                format!("{:.1}%", (summary.qualified_dividends / summary.total_dividend_income) * rust_decimal::Decimal::from(100))
+            } else {
+                "0.0%".to_string()
+            },
+        },
+        IncomeSummary {
+            category: "  Non-Qualified Dividends".to_string(),
+            amount: format!("${:.2}", summary.non_qualified_dividends),
+            percentage: if summary.total_dividend_income > rust_decimal::Decimal::ZERO {
+                format!("{:.1}%", (summary.non_qualified_dividends / summary.total_dividend_income) * rust_decimal::Decimal::from(100))
+            } else {
+                "0.0%".to_string()
+            },
+        },
+    ];
+
+    if summary.return_of_capital > rust_decimal::Decimal::ZERO {
+        income_data.push(IncomeSummary {
+            category: "  Return of Capital".to_string(),
+            amount: format!("${:.2}", summary.return_of_capital),
+            percentage: if summary.total_dividend_income > rust_decimal::Decimal::ZERO {
+                format!("{:.1}%", (summary.return_of_capital / summary.total_dividend_income) * rust_decimal::Decimal::from(100))
+            } else {
+                "0.0%".to_string()
+            },
+        });
+    }
+
+    if summary.tax_free_dividends > rust_decimal::Decimal::ZERO {
+        income_data.push(IncomeSummary {
+            category: "  Tax-Free Dividends".to_string(),
+            amount: format!("${:.2}", summary.tax_free_dividends),
+            percentage: if summary.total_dividend_income > rust_decimal::Decimal::ZERO {
+                format!("{:.1}%", (summary.tax_free_dividends / summary.total_dividend_income) * rust_decimal::Decimal::from(100))
+            } else {
+                "0.0%".to_string()
+            },
+        });
+    }
+
+    if summary.foreign_dividends.total_foreign_income > rust_decimal::Decimal::ZERO {
+        income_data.push(IncomeSummary {
+            category: "  Foreign Dividends".to_string(),
+            amount: format!("${:.2}", summary.foreign_dividends.total_foreign_income),
+            percentage: if summary.total_dividend_income > rust_decimal::Decimal::ZERO {
+                format!("{:.1}%", (summary.foreign_dividends.total_foreign_income / summary.total_dividend_income) * rust_decimal::Decimal::from(100))
+            } else {
+                "0.0%".to_string()
+            },
+        });
+    }
+
+    let table = Table::new(income_data).to_string();
+    println!("{}", table);
+    println!();
+
+    // Display estimated tax if available
+    if let Some(ref estimated_tax) = summary.estimated_tax {
+        display_estimated_tax_section(estimated_tax)?;
+    }
+
+    // Display by-symbol breakdown if there are multiple symbols
+    if summary.by_symbol.len() > 1 {
+        display_symbol_breakdown(&summary.by_symbol)?;
+    }
+
+    Ok(())
+}
+
+/// Display estimated tax section
+fn display_estimated_tax_section(estimated_tax: &crate::tax::EstimatedTax) -> Result<()> {
+    use tabled::{Table, Tabled};
+    use colored::*;
+
+    println!("{}", "💰 Estimated Tax Liability".blue().bold());
+
+    #[derive(Tabled)]
+    struct TaxEstimate {
+        #[tabled(rename = "Income Type")]
+        income_type: String,
+        #[tabled(rename = "Tax Rate")]
+        tax_rate: String,
+        #[tabled(rename = "Estimated Tax")]
+        estimated_tax: String,
+    }
+
+    let tax_data = vec![
+        TaxEstimate {
+            income_type: "Qualified Dividends".to_string(),
+            tax_rate: format!("{:.1}%", estimated_tax.capital_gains_rate * rust_decimal::Decimal::from(100)),
+            estimated_tax: format!("${:.2}", estimated_tax.qualified_tax),
+        },
+        TaxEstimate {
+            income_type: "Non-Qualified Dividends".to_string(),
+            tax_rate: format!("{:.1}%", estimated_tax.ordinary_tax_bracket * rust_decimal::Decimal::from(100)),
+            estimated_tax: format!("${:.2}", estimated_tax.non_qualified_tax),
+        },
+        TaxEstimate {
+            income_type: "Total Estimated Tax".to_string(),
+            tax_rate: "-".to_string(),
+            estimated_tax: format!("${:.2}", estimated_tax.total_estimated_tax),
+        },
+    ];
+
+    let table = Table::new(tax_data).to_string();
+    println!("{}", table);
+
+    println!();
+    println!("{} Assumptions: {} filing, {} income bracket",
+             "ℹ️".blue(),
+             format!("{:?}", estimated_tax.tax_assumptions.filing_status).cyan(),
+             format!("{:?}", estimated_tax.tax_assumptions.income_bracket).cyan());
+    println!("{} Tax rates are estimates based on {} tax brackets",
+             "⚠️".yellow(),
+             estimated_tax.tax_assumptions.tax_year);
+    println!();
+
+    Ok(())
+}
+
+/// Display symbol breakdown
+fn display_symbol_breakdown(by_symbol: &std::collections::HashMap<String, crate::tax::SymbolTaxSummary>) -> Result<()> {
+    use tabled::{Table, Tabled};
+    use colored::*;
+
+    println!("{}", "📈 Breakdown by Stock Symbol".blue().bold());
+
+    #[derive(Tabled)]
+    struct SymbolRow {
+        #[tabled(rename = "Symbol")]
+        symbol: String,
+        #[tabled(rename = "Total Income")]
+        total_income: String,
+        #[tabled(rename = "Qualified")]
+        qualified: String,
+        #[tabled(rename = "Non-Qualified")]
+        non_qualified: String,
+        #[tabled(rename = "Payments")]
+        payments: String,
+    }
+
+    let mut symbol_data: Vec<SymbolRow> = by_symbol
+        .iter()
+        .map(|(symbol, summary)| SymbolRow {
+            symbol: symbol.clone(),
+            total_income: format!("${:.2}", summary.total_income),
+            qualified: format!("${:.2}", summary.qualified_amount),
+            non_qualified: format!("${:.2}", summary.non_qualified_amount),
+            payments: summary.payment_count.to_string(),
+        })
+        .collect();
+
+    // Sort by total income (highest first)
+    symbol_data.sort_by(|a, b| {
+        let a_amount: f64 = a.total_income[1..].parse().unwrap_or(0.0);
+        let b_amount: f64 = b.total_income[1..].parse().unwrap_or(0.0);
+        b_amount.partial_cmp(&a_amount).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let table = Table::new(symbol_data).to_string();
+    println!("{}", table);
+    println!();
+
+    Ok(())
+}
+
+/// Display 1099-DIV report
+fn display_1099_div_report(report: &crate::tax::Form1099DIV) -> Result<()> {
+    use tabled::{Table, Tabled};
+    use colored::*;
+
+    println!("{} {}", "📋 1099-DIV Report for".blue().bold(), report.tax_year.to_string().cyan().bold());
+    println!();
+
+    // Summary section
+    println!("{}", "Summary Totals".blue().bold());
+
+    #[derive(Tabled)]
+    struct SummaryRow {
+        #[tabled(rename = "Box")]
+        box_num: String,
+        #[tabled(rename = "Description")]
+        description: String,
+        #[tabled(rename = "Amount")]
+        amount: String,
+    }
+
+    let summary_data = vec![
+        SummaryRow {
+            box_num: "1a".to_string(),
+            description: "Total Ordinary Dividends".to_string(),
+            amount: format!("${:.2}", report.summary.total_ordinary_dividends),
+        },
+        SummaryRow {
+            box_num: "1b".to_string(),
+            description: "Qualified Dividends".to_string(),
+            amount: format!("${:.2}", report.summary.total_qualified_dividends),
+        },
+        SummaryRow {
+            box_num: "3".to_string(),
+            description: "Non-dividend Distributions".to_string(),
+            amount: format!("${:.2}", report.summary.total_non_dividend_distributions),
+        },
+    ];
+
+    let table = Table::new(summary_data).to_string();
+    println!("{}", table);
+    println!();
+
+    // Payer details
+    if !report.payers.is_empty() {
+        println!("{}", "Payer Details".blue().bold());
+
+        #[derive(Tabled)]
+        struct PayerRow {
+            #[tabled(rename = "Payer")]
+            payer: String,
+            #[tabled(rename = "Symbol")]
+            symbol: String,
+            #[tabled(rename = "Box 1a")]
+            box_1a: String,
+            #[tabled(rename = "Box 1b")]
+            box_1b: String,
+            #[tabled(rename = "Box 3")]
+            box_3: String,
+        }
+
+        let payer_data: Vec<PayerRow> = report.payers
+            .iter()
+            .map(|payer| PayerRow {
+                payer: payer.payer_name.clone(),
+                symbol: payer.symbols.join(", "),
+                box_1a: format!("${:.2}", payer.total_ordinary_dividends),
+                box_1b: format!("${:.2}", payer.qualified_dividends),
+                box_3: format!("${:.2}", payer.non_dividend_distributions),
+            })
+            .collect();
+
+        let table = Table::new(payer_data).to_string();
+        println!("{}", table);
+        println!();
+    }
+
+    println!("{} This report summarizes your dividend income in 1099-DIV format", "ℹ️".blue());
+    println!("{} Use these amounts when filing your tax return", "📝".green());
+    println!();
+
+    Ok(())
+}
+
+/// Display tax estimate
+fn display_tax_estimate(summary: &crate::tax::TaxSummary) -> Result<()> {
+    use colored::*;
+
+    println!("{} {}", "💰 Tax Estimate for".blue().bold(), summary.tax_year.to_string().cyan().bold());
+    println!();
+
+    if let Some(ref estimated_tax) = summary.estimated_tax {
+        println!("  {} {}",
+                 "Qualified Dividend Income:".bright_blue(),
+                 format!("${:.2}", summary.qualified_dividends).green());
+        println!("  {} {} ({})",
+                 "  Estimated Tax:".dimmed(),
+                 format!("${:.2}", estimated_tax.qualified_tax).yellow(),
+                 format!("{:.1}% rate", estimated_tax.capital_gains_rate * rust_decimal::Decimal::from(100)).dimmed());
+
+        println!();
+        println!("  {} {}",
+                 "Non-Qualified Dividend Income:".bright_blue(),
+                 format!("${:.2}", summary.non_qualified_dividends).green());
+        println!("  {} {} ({})",
+                 "  Estimated Tax:".dimmed(),
+                 format!("${:.2}", estimated_tax.non_qualified_tax).yellow(),
+                 format!("{:.1}% rate", estimated_tax.ordinary_tax_bracket * rust_decimal::Decimal::from(100)).dimmed());
+
+        println!();
+        println!("  {} {}",
+                 "Total Estimated Tax:".bright_blue().bold(),
+                 format!("${:.2}", estimated_tax.total_estimated_tax).red().bold());
+
+        println!();
+        println!("{} Based on {} filing status, {} income bracket",
+                 "ℹ️".blue(),
+                 format!("{:?}", estimated_tax.tax_assumptions.filing_status).cyan(),
+                 format!("{:?}", estimated_tax.tax_assumptions.income_bracket).cyan());
+        println!("{} These are estimates based on {} tax rates. Consult a tax professional for accuracy.",
+                 "⚠️".yellow(),
+                 estimated_tax.tax_assumptions.tax_year);
+    } else {
+        println!("{}", "No tax estimates available. Use --estimate flag with filing status and income bracket.".yellow());
+    }
+
+    println!();
+    Ok(())
+}
+
+/// Display tax lots
+fn display_tax_lots(lots: &[&crate::tax::TaxLotSummary], symbol_filter: Option<&str>) -> Result<()> {
+    use tabled::{Table, Tabled};
+    use colored::*;
+
+    if lots.is_empty() {
+        if let Some(symbol) = symbol_filter {
+            println!("{}", format!("No tax lot information found for {}.", symbol).yellow());
+        } else {
+            println!("{}", "No tax lot information found.".yellow());
+        }
+        return Ok(());
+    }
+
+    let title = if let Some(symbol) = symbol_filter {
+        format!("📊 Tax Lots for {}", symbol)
+    } else {
+        "📊 Tax Lot Summary".to_string()
+    };
+
+    println!("{}", title.blue().bold());
+    println!();
+
+    #[derive(Tabled)]
+    struct TaxLotRow {
+        #[tabled(rename = "Tax Lot ID")]
+        tax_lot_id: String,
+        #[tabled(rename = "Symbol")]
+        symbol: String,
+        #[tabled(rename = "Dividend Income")]
+        dividend_income: String,
+        #[tabled(rename = "Shares")]
+        shares: String,
+        #[tabled(rename = "Purchase Date")]
+        purchase_date: String,
+        #[tabled(rename = "Cost Basis/Share")]
+        cost_basis: String,
+    }
+
+    let lot_data: Vec<TaxLotRow> = lots
+        .iter()
+        .map(|lot| TaxLotRow {
+            tax_lot_id: lot.tax_lot_id.clone(),
+            symbol: lot.symbol.clone(),
+            dividend_income: format!("${:.2}", lot.dividend_income),
+            shares: lot.shares.map(|s| s.to_string()).unwrap_or_else(|| "N/A".to_string()),
+            purchase_date: lot.purchase_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+            cost_basis: lot.cost_basis_per_share.map(|c| format!("${:.2}", c)).unwrap_or_else(|| "N/A".to_string()),
+        })
+        .collect();
+
+    let table = Table::new(lot_data).to_string();
+    println!("{}", table);
+
+    println!();
+    println!("{} Tax lot tracking requires additional cost basis data", "ℹ️".blue());
+    println!("{} Consider adding purchase dates and cost basis information for complete tracking", "💡".yellow());
+    println!();
+
+    Ok(())
+}
+
+/// Export tax lots to CSV
+fn export_tax_lots_csv(lots: &[&crate::tax::TaxLotSummary], file_path: &str) -> Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let mut file = File::create(file_path)?;
+
+    // Write header
+    writeln!(file, "Tax Lot ID,Symbol,Dividend Income,Shares,Purchase Date,Cost Basis Per Share")?;
+
+    // Write data
+    for lot in lots {
+        writeln!(
+            file,
+            "{},{},{},{},{},{}",
+            lot.tax_lot_id,
+            lot.symbol,
+            lot.dividend_income,
+            lot.shares.map(|s| s.to_string()).unwrap_or_else(|| "".to_string()),
+            lot.purchase_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "".to_string()),
+            lot.cost_basis_per_share.map(|c| c.to_string()).unwrap_or_else(|| "".to_string())
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Parse filing status from string
+fn parse_filing_status(status: Option<&str>) -> Result<crate::tax::FilingStatus> {
+    use crate::tax::FilingStatus;
+
+    match status.unwrap_or("single").to_lowercase().as_str() {
+        "single" => Ok(FilingStatus::Single),
+        "married-jointly" | "marriedfilingjointly" | "mfj" => Ok(FilingStatus::MarriedFilingJointly),
+        "married-separately" | "marriedfilingseparately" | "mfs" => Ok(FilingStatus::MarriedFilingSeparately),
+        "head-of-household" | "headofhousehold" | "hoh" => Ok(FilingStatus::HeadOfHousehold),
+        _ => Err(anyhow!("Invalid filing status. Use: single, married-jointly, married-separately, head-of-household")),
+    }
+}
+
+/// Parse income bracket from string
+fn parse_income_bracket(bracket: Option<&str>) -> Result<crate::tax::IncomeBracket> {
+    use crate::tax::IncomeBracket;
+
+    match bracket.unwrap_or("medium").to_lowercase().as_str() {
+        "low" => Ok(IncomeBracket::Low),
+        "medium" | "med" => Ok(IncomeBracket::Medium),
+        "high" => Ok(IncomeBracket::High),
+        "very-high" | "veryhigh" | "vh" => Ok(IncomeBracket::VeryHigh),
+        _ => Err(anyhow!("Invalid income bracket. Use: low, medium, high, very-high")),
+    }
 }
