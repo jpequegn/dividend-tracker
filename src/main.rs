@@ -14,8 +14,10 @@ mod holdings;
 mod models;
 mod notifications;
 mod persistence;
+mod projections;
 
 use persistence::PersistenceManager;
+use projections::{GrowthScenario, ProjectionEngine, ProjectionMethod};
 
 #[derive(Parser)]
 #[command(name = "dividend-tracker")]
@@ -110,6 +112,27 @@ enum Commands {
         /// Show all analytics (equivalent to --growth --frequency --consistency --yield-analysis)
         #[arg(long)]
         all: bool,
+    },
+    /// Project future dividend income based on historical data
+    Project {
+        /// Projection method to use
+        #[arg(long, default_value = "last-12-months")]
+        method: String,
+        /// Growth scenario (conservative, moderate, optimistic, or custom percentage)
+        #[arg(long, default_value = "moderate")]
+        growth_rate: String,
+        /// Target year to project (defaults to next year)
+        #[arg(long)]
+        year: Option<i32>,
+        /// Export projections to CSV file
+        #[arg(long)]
+        export_csv: Option<String>,
+        /// Export projections to JSON file
+        #[arg(long)]
+        export_json: Option<String>,
+        /// Show detailed monthly breakdown
+        #[arg(long)]
+        monthly: bool,
     },
     /// Import dividend data from CSV file
     Import {
@@ -328,6 +351,16 @@ fn main() -> Result<()> {
                 monthly,
                 all,
             )?;
+        }
+        Some(Commands::Project {
+            method,
+            growth_rate,
+            year,
+            export_csv,
+            export_json,
+            monthly,
+        }) => {
+            handle_project_command(method, growth_rate, year, export_csv, export_json, monthly)?;
         }
         Some(Commands::Import { file }) => {
             println!("{}", "Importing dividend data...".green());
@@ -1754,5 +1787,266 @@ fn handle_data_command(command: DataCommands) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Handle dividend projection command
+fn handle_project_command(
+    method: String,
+    growth_rate: String,
+    year: Option<i32>,
+    export_csv: Option<String>,
+    export_json: Option<String>,
+    monthly: bool,
+) -> Result<()> {
+    use crate::projections::*;
+
+    println!("{}", "Dividend Income Projections".green().bold());
+    println!();
+
+    // Load persistence manager and existing data
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.holdings.is_empty() {
+        println!("{}", "No holdings found. Add holdings first to generate projections.".yellow());
+        println!("Use the 'holdings add' command to add your stock positions.");
+        return Ok(());
+    }
+
+    if tracker.dividends.is_empty() {
+        println!("{}", "No dividend history found. Add dividend records first.".yellow());
+        println!("Use the 'add' command to add historical dividend payments.");
+        return Ok(());
+    }
+
+    // Parse projection method
+    let projection_method = match method.as_str() {
+        "last-12-months" => ProjectionMethod::Last12Months,
+        "average-2-years" => ProjectionMethod::AverageYears(2),
+        "average-3-years" => ProjectionMethod::AverageYears(3),
+        "current-yield" => ProjectionMethod::CurrentYield,
+        _ => {
+            return Err(anyhow!("Invalid projection method: {}. Use: last-12-months, average-2-years, average-3-years, or current-yield", method));
+        }
+    };
+
+    // Parse growth scenario
+    let growth_scenario = match growth_rate.as_str() {
+        "conservative" => GrowthScenario::Conservative,
+        "moderate" => GrowthScenario::Moderate,
+        "optimistic" => GrowthScenario::Optimistic,
+        custom if custom.ends_with('%') => {
+            let rate_str = custom.trim_end_matches('%');
+            let rate = rate_str.parse::<f64>()
+                .map_err(|_| anyhow!("Invalid custom growth rate: {}", custom))?;
+            GrowthScenario::Custom(rust_decimal::Decimal::from_f64_retain(rate / 100.0)
+                .ok_or_else(|| anyhow!("Invalid growth rate value"))?)
+        }
+        _ => {
+            return Err(anyhow!("Invalid growth rate: {}. Use: conservative, moderate, optimistic, or a percentage like '7.5%'", growth_rate));
+        }
+    };
+
+    // Generate projections
+    let projection = ProjectionEngine::generate_projection(
+        &tracker,
+        projection_method,
+        growth_scenario,
+        year,
+    )?;
+
+    // Display basic projection summary
+    display_projection_summary(&projection)?;
+
+    // Display monthly breakdown if requested
+    if monthly {
+        display_monthly_projections(&projection)?;
+    }
+
+    // Display individual stock projections
+    display_stock_projections(&projection)?;
+
+    // Display metadata and confidence
+    display_projection_metadata(&projection)?;
+
+    // Export to CSV if requested
+    if let Some(csv_path) = export_csv {
+        ProjectionEngine::export_to_csv(&projection, &csv_path)?;
+        println!();
+        println!("{} Projections exported to {}",
+                 "✓".green(),
+                 csv_path.cyan());
+    }
+
+    // Export to JSON if requested
+    if let Some(json_path) = export_json {
+        ProjectionEngine::export_to_json(&projection, &json_path)?;
+        println!();
+        println!("{} Projections exported to {}",
+                 "✓".green(),
+                 json_path.cyan());
+    }
+
+    Ok(())
+}
+
+/// Display projection summary
+fn display_projection_summary(projection: &projections::DividendProjection) -> Result<()> {
+    println!("{}", "📊 Projection Summary".blue().bold());
+    println!();
+
+    println!("  Target Year: {}", projection.year.to_string().cyan());
+    println!("  Projection Method: {}", format!("{:?}", projection.method).cyan());
+    println!("  Growth Scenario: {}", projection.growth_scenario.name().cyan());
+    println!();
+
+    println!("  {} {}",
+             "Projected Annual Income:".bright_blue(),
+             format!("${:.2}", projection.total_projected_income).green().bold());
+
+    // Calculate monthly average
+    let monthly_average = projection.total_projected_income / rust_decimal::Decimal::from(12);
+    println!("  {} {}",
+             "Average Monthly Income:".bright_blue(),
+             format!("${:.2}", monthly_average).yellow());
+
+    println!();
+    Ok(())
+}
+
+/// Display monthly projection breakdown
+fn display_monthly_projections(projection: &projections::DividendProjection) -> Result<()> {
+    println!("{}", "📅 Monthly Projected Cash Flow".blue().bold());
+    println!();
+
+    let mut builder = Builder::new();
+    builder.push_record(vec![
+        "Month".bold().to_string(),
+        "Projected Income".bold().to_string(),
+        "Payments".bold().to_string(),
+        "Top Contributors".bold().to_string(),
+    ]);
+
+    for month in 1..=12 {
+        if let Some(monthly) = projection.monthly_projections.get(&month) {
+            let top_contributors = if monthly.top_payers.len() > 3 {
+                format!("{}, +{} more",
+                        monthly.top_payers[..3].join(", "),
+                        monthly.top_payers.len() - 3)
+            } else {
+                monthly.top_payers.join(", ")
+            };
+
+            builder.push_record(vec![
+                monthly.month_name.clone(),
+                format!("${:.2}", monthly.projected_amount),
+                monthly.payment_count.to_string(),
+                top_contributors,
+            ]);
+        }
+    }
+
+    let mut table = builder.build();
+    table.with(Style::rounded());
+    println!("{}", table);
+    println!();
+
+    Ok(())
+}
+
+/// Display individual stock projections
+fn display_stock_projections(projection: &projections::DividendProjection) -> Result<()> {
+    if projection.stock_projections.is_empty() {
+        return Ok(());
+    }
+
+    println!("{}", "📈 Individual Stock Projections".blue().bold());
+    println!();
+
+    let mut builder = Builder::new();
+    builder.push_record(vec![
+        "Symbol".bold().to_string(),
+        "Shares".bold().to_string(),
+        "Current $/Share".bold().to_string(),
+        "Projected $/Share".bold().to_string(),
+        "Annual Projection".bold().to_string(),
+        "Frequency".bold().to_string(),
+    ]);
+
+    // Sort by projected annual dividend (highest first)
+    let mut sorted_stocks = projection.stock_projections.clone();
+    sorted_stocks.sort_by(|a, b| b.projected_annual_dividend.cmp(&a.projected_annual_dividend));
+
+    for stock in &sorted_stocks {
+        builder.push_record(vec![
+            stock.symbol.clone(),
+            stock.current_shares.to_string(),
+            format!("${:.3}", stock.historical_dividend_per_share),
+            format!("${:.3}", stock.projected_dividend_per_share),
+            format!("${:.2}", stock.projected_annual_dividend),
+            stock.payment_frequency.name().to_string(),
+        ]);
+    }
+
+    let mut table = builder.build();
+    table.with(Style::rounded());
+    println!("{}", table);
+    println!();
+
+    Ok(())
+}
+
+/// Display projection metadata and confidence
+fn display_projection_metadata(projection: &projections::DividendProjection) -> Result<()> {
+    let metadata = &projection.metadata;
+
+    println!("{}", "ℹ️ Projection Details".blue().bold());
+    println!();
+
+    println!("  {} {}",
+             "Confidence Score:".bright_blue(),
+             format!("{}%", metadata.confidence_score).cyan());
+
+    println!("  {} {}",
+             "Historical Data Points:".bright_blue(),
+             metadata.data_points_used.to_string().cyan());
+
+    println!("  {} {}",
+             "Stocks Included:".bright_blue(),
+             metadata.stocks_included.to_string().cyan());
+
+    if !metadata.stocks_excluded.is_empty() {
+        println!("  {} {} ({})",
+                 "Stocks Excluded:".bright_blue(),
+                 metadata.stocks_excluded.len().to_string().yellow(),
+                 metadata.stocks_excluded.join(", "));
+        println!("    {} {}",
+                 "Reason:".dimmed(),
+                 "No historical dividend data".dimmed());
+    }
+
+    if let (Some(start), Some(end)) = metadata.historical_range {
+        println!("  {} {} to {}",
+                 "Historical Range:".bright_blue(),
+                 start.format("%Y-%m-%d").to_string().cyan(),
+                 end.format("%Y-%m-%d").to_string().cyan());
+    }
+
+    println!();
+
+    // Show confidence interpretation
+    match metadata.confidence_score {
+        90..=100 => println!("  {} High confidence based on comprehensive historical data",
+                             "💚".green()),
+        70..=89 => println!("  {} Moderate confidence - consider updating historical data",
+                            "💛".yellow()),
+        50..=69 => println!("  {} Low confidence - projections are estimates only",
+                           "🧡".yellow()),
+        _ => println!("  {} Very low confidence - add more historical data",
+                     "❤️".red()),
+    }
+
+    println!();
     Ok(())
 }
