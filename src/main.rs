@@ -5,6 +5,7 @@ use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use tabled::{builder::Builder, settings::Style};
 
 mod api;
 mod config;
@@ -136,6 +137,27 @@ enum Commands {
         /// Show payments from specific year
         #[arg(short, long)]
         year: Option<i32>,
+        /// Filter by specific month (1-12)
+        #[arg(short, long)]
+        month: Option<u32>,
+        /// Filter by date range (start date YYYY-MM-DD)
+        #[arg(long)]
+        date_start: Option<String>,
+        /// Filter by date range (end date YYYY-MM-DD)
+        #[arg(long)]
+        date_end: Option<String>,
+        /// Minimum dividend amount per share
+        #[arg(long)]
+        amount_min: Option<String>,
+        /// Show only upcoming pay dates (future)
+        #[arg(long)]
+        upcoming: bool,
+        /// Sort by field (symbol, ex-date, pay-date, amount, total)
+        #[arg(long, default_value = "ex-date")]
+        sort_by: String,
+        /// Sort in descending order
+        #[arg(long)]
+        reverse: bool,
     },
     /// Show portfolio summary and statistics
     Summary {
@@ -330,18 +352,28 @@ fn main() -> Result<()> {
         }) => {
             handle_add_command(symbol, ex_date, pay_date, amount, shares, force)?;
         }
-        Some(Commands::List { symbol, year }) => {
-            println!("{}", "Listing dividend payments...".green());
-            if let Some(symbol) = symbol {
-                println!("Filtering by symbol: {}", symbol.cyan());
-            }
-            if let Some(year) = year {
-                println!("Filtering by year: {}", year.to_string().blue());
-            }
-            println!(
-                "{}",
-                "No dividend records found. Use 'add' command to add some!".yellow()
-            );
+        Some(Commands::List {
+            symbol,
+            year,
+            month,
+            date_start,
+            date_end,
+            amount_min,
+            upcoming,
+            sort_by,
+            reverse
+        }) => {
+            handle_list_command(
+                symbol,
+                year,
+                month,
+                date_start,
+                date_end,
+                amount_min,
+                upcoming,
+                sort_by,
+                reverse
+            )?;
         }
         Some(Commands::Summary { year }) => {
             println!("{}", "Portfolio Summary".green().bold());
@@ -399,6 +431,272 @@ fn main() -> Result<()> {
             println!("{}", "Dividend Tracker CLI".green().bold());
             println!("Use --help to see available commands");
         }
+    }
+
+    Ok(())
+}
+
+/// Handle listing dividend payments with filtering and sorting
+fn handle_list_command(
+    symbol: Option<String>,
+    year: Option<i32>,
+    month: Option<u32>,
+    date_start: Option<String>,
+    date_end: Option<String>,
+    amount_min: Option<String>,
+    upcoming: bool,
+    sort_by: String,
+    reverse: bool,
+) -> Result<()> {
+    use crate::models::Dividend;
+
+    println!("{}", "Listing dividend payments...".green().bold());
+
+    // Load persistence manager and existing data
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.dividends.is_empty() {
+        println!(
+            "{}",
+            "No dividend records found. Use 'add' command to add some!".yellow()
+        );
+        return Ok(());
+    }
+
+    // Parse filters
+    let date_start_parsed = if let Some(ref ds) = date_start {
+        Some(parse_dividend_date(ds)?)
+    } else {
+        None
+    };
+
+    let date_end_parsed = if let Some(ref de) = date_end {
+        Some(parse_dividend_date(de)?)
+    } else {
+        None
+    };
+
+    let amount_min_parsed = if let Some(ref am) = amount_min {
+        Some(Decimal::from_str(am).map_err(|_| {
+            anyhow!("Invalid minimum amount format: {}. Use decimal format like 0.50", am)
+        })?)
+    } else {
+        None
+    };
+
+    // Filter dividends
+    let mut filtered_dividends: Vec<&Dividend> = tracker.dividends
+        .iter()
+        .filter(|div| {
+            // Symbol filter
+            if let Some(ref sym) = symbol {
+                if !div.symbol.to_uppercase().contains(&sym.to_uppercase()) {
+                    return false;
+                }
+            }
+
+            // Year filter
+            if let Some(y) = year {
+                if div.ex_date.year() != y {
+                    return false;
+                }
+            }
+
+            // Month filter
+            if let Some(m) = month {
+                if div.ex_date.month() != m {
+                    return false;
+                }
+            }
+
+            // Date range filter
+            if let Some(start) = date_start_parsed {
+                if div.ex_date < start {
+                    return false;
+                }
+            }
+
+            if let Some(end) = date_end_parsed {
+                if div.ex_date > end {
+                    return false;
+                }
+            }
+
+            // Amount minimum filter
+            if let Some(min_amount) = amount_min_parsed {
+                if div.amount_per_share < min_amount {
+                    return false;
+                }
+            }
+
+            // Upcoming filter (future pay dates only)
+            if upcoming {
+                let today = Local::now().naive_local().date();
+                if div.pay_date <= today {
+                    return false;
+                }
+            }
+
+            true
+        })
+        .collect();
+
+    if filtered_dividends.is_empty() {
+        println!("{}", "No dividends match the specified filters.".yellow());
+        return Ok(());
+    }
+
+    // Sort dividends
+    filtered_dividends.sort_by(|a, b| {
+        let comparison = match sort_by.as_str() {
+            "symbol" => a.symbol.cmp(&b.symbol),
+            "ex-date" => a.ex_date.cmp(&b.ex_date),
+            "pay-date" => a.pay_date.cmp(&b.pay_date),
+            "amount" => a.amount_per_share.cmp(&b.amount_per_share),
+            "total" => a.total_amount.cmp(&b.total_amount),
+            _ => a.ex_date.cmp(&b.ex_date), // Default to ex-date
+        };
+
+        if reverse {
+            comparison.reverse()
+        } else {
+            comparison
+        }
+    });
+
+    // Build table
+    let mut builder = Builder::new();
+
+    // Add header
+    builder.push_record(vec![
+        "Symbol".bold().to_string(),
+        "Company".bold().to_string(),
+        "Ex-Date".bold().to_string(),
+        "Pay-Date".bold().to_string(),
+        "$/Share".bold().to_string(),
+        "Shares".bold().to_string(),
+        "Total".bold().to_string(),
+    ]);
+
+    // Add dividend rows
+    let today = Local::now().naive_local().date();
+    let mut total_income = Decimal::ZERO;
+
+    for dividend in &filtered_dividends {
+        total_income += dividend.total_amount;
+
+        // Color upcoming dividends green
+        let is_upcoming = dividend.pay_date > today;
+
+        let symbol = if is_upcoming {
+            dividend.symbol.green().to_string()
+        } else {
+            dividend.symbol.to_string()
+        };
+
+        let company = dividend.company_name
+            .as_ref()
+            .map(|c| if is_upcoming { c.green().to_string() } else { c.to_string() })
+            .unwrap_or_else(|| "-".to_string());
+
+        let ex_date = if is_upcoming {
+            dividend.ex_date.format("%Y-%m-%d").to_string().green().to_string()
+        } else {
+            dividend.ex_date.format("%Y-%m-%d").to_string()
+        };
+
+        let pay_date = if is_upcoming {
+            dividend.pay_date.format("%Y-%m-%d").to_string().green().to_string()
+        } else {
+            dividend.pay_date.format("%Y-%m-%d").to_string()
+        };
+
+        let amount_str = format!("${:.4}", dividend.amount_per_share);
+        let amount = if is_upcoming {
+            amount_str.green().to_string()
+        } else {
+            amount_str
+        };
+
+        let shares_str = dividend.shares_owned.to_string();
+        let shares = if is_upcoming {
+            shares_str.green().to_string()
+        } else {
+            shares_str
+        };
+
+        let total_str = format!("${:.2}", dividend.total_amount);
+        let total = if is_upcoming {
+            total_str.green().to_string()
+        } else {
+            total_str
+        };
+
+        builder.push_record(vec![
+            symbol,
+            company,
+            ex_date,
+            pay_date,
+            amount,
+            shares,
+            total,
+        ]);
+    }
+
+    // Create and style the table
+    let mut table = builder.build();
+    table.with(Style::rounded());
+
+    println!("{}", table);
+    println!();
+
+    // Show summary
+    println!("{} {}",
+        "Total Dividends:".bold(),
+        format!("${:.2}", total_income).green().bold()
+    );
+
+    println!("{} {}",
+        "Number of Payments:".bold(),
+        filtered_dividends.len().to_string().cyan().bold()
+    );
+
+    // Show filter summary
+    let has_filters = symbol.is_some() || year.is_some() || month.is_some() || date_start.is_some() ||
+                     date_end.is_some() || amount_min.is_some() || upcoming;
+
+    if has_filters || sort_by != "ex-date" || reverse {
+        println!();
+
+        if has_filters {
+            println!("{}", "Applied Filters:".bold());
+
+            if let Some(sym) = symbol {
+                println!("  Symbol: {}", sym.cyan());
+            }
+            if let Some(y) = year {
+                println!("  Year: {}", y.to_string().blue());
+            }
+            if let Some(m) = month {
+                println!("  Month: {}", m.to_string().blue());
+            }
+            if let Some(ds) = date_start {
+                println!("  Date Start: {}", ds.blue());
+            }
+            if let Some(de) = date_end {
+                println!("  Date End: {}", de.blue());
+            }
+            if let Some(am) = amount_min {
+                println!("  Min Amount: ${}", am.blue());
+            }
+            if upcoming {
+                println!("  {} {}", "Upcoming Only:".blue(), "Yes".green());
+            }
+        }
+
+        println!("  Sorted by: {} {}", sort_by.yellow(),
+            if reverse { "(descending)".dimmed() } else { "(ascending)".dimmed() });
     }
 
     Ok(())

@@ -46,10 +46,15 @@ pub struct PersistenceManager {
 impl PersistenceManager {
     /// Create a new persistence manager with default paths
     pub fn new() -> Result<Self> {
-        let home_dir = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+        // Check for environment variable first (mainly for testing)
+        let data_dir = if let Ok(custom_dir) = std::env::var("DIVIDEND_TRACKER_DATA_DIR") {
+            PathBuf::from(custom_dir)
+        } else {
+            let home_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+            home_dir.join(".dividend-tracker")
+        };
 
-        let data_dir = home_dir.join(".dividend-tracker");
         let backup_dir = data_dir.join("backups");
 
         Ok(PersistenceManager {
