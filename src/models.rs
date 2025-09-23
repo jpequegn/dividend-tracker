@@ -21,6 +21,23 @@ pub enum DividendType {
     SpinOff,
 }
 
+/// Tax classification for dividend payments (for US tax purposes)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TaxClassification {
+    /// Qualified dividends eligible for capital gains tax rates
+    Qualified,
+    /// Non-qualified dividends taxed as ordinary income
+    NonQualified,
+    /// Return of capital (not taxable as income)
+    ReturnOfCapital,
+    /// Tax-free dividend (e.g., from municipal bonds)
+    TaxFree,
+    /// Foreign dividends (may have different tax treatment)
+    Foreign,
+    /// Unknown classification (default for existing data)
+    Unknown,
+}
+
 /// Represents a dividend payment record
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dividend {
@@ -40,6 +57,18 @@ pub struct Dividend {
     pub total_amount: Decimal,
     /// Type of dividend payment
     pub dividend_type: DividendType,
+    /// Tax classification for this dividend (US tax purposes)
+    #[serde(default = "default_tax_classification")]
+    pub tax_classification: TaxClassification,
+    /// Optional tax lot identifier for tracking cost basis
+    pub tax_lot_id: Option<String>,
+    /// Optional withholding tax amount for foreign dividends
+    pub withholding_tax: Option<Decimal>,
+}
+
+/// Default tax classification for backward compatibility
+fn default_tax_classification() -> TaxClassification {
+    TaxClassification::Unknown
 }
 
 /// Represents a stock holding in the portfolio
@@ -104,6 +133,62 @@ impl Dividend {
             shares_owned,
             total_amount,
             dividend_type,
+            tax_classification: TaxClassification::Unknown, // Default for new dividends
+            tax_lot_id: None,
+            withholding_tax: None,
+        })
+    }
+
+    /// Create a new dividend record with tax information
+    pub fn new_with_tax(
+        symbol: String,
+        company_name: Option<String>,
+        ex_date: NaiveDate,
+        pay_date: NaiveDate,
+        amount_per_share: Decimal,
+        shares_owned: Decimal,
+        dividend_type: DividendType,
+        tax_classification: TaxClassification,
+        tax_lot_id: Option<String>,
+        withholding_tax: Option<Decimal>,
+    ) -> Result<Self> {
+        // Validation checks (same as new method)
+        if symbol.trim().is_empty() {
+            bail!("Symbol cannot be empty");
+        }
+
+        if amount_per_share <= Decimal::ZERO {
+            bail!("Amount per share must be positive");
+        }
+
+        if shares_owned <= Decimal::ZERO {
+            bail!("Shares owned must be positive");
+        }
+
+        if pay_date < ex_date {
+            bail!("Pay date cannot be before ex-dividend date");
+        }
+
+        if let Some(withholding) = withholding_tax {
+            if withholding < Decimal::ZERO {
+                bail!("Withholding tax cannot be negative");
+            }
+        }
+
+        let total_amount = amount_per_share * shares_owned;
+
+        Ok(Dividend {
+            symbol: symbol.trim().to_uppercase(),
+            company_name,
+            ex_date,
+            pay_date,
+            amount_per_share,
+            shares_owned,
+            total_amount,
+            dividend_type,
+            tax_classification,
+            tax_lot_id,
+            withholding_tax,
         })
     }
 }
