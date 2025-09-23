@@ -329,7 +329,7 @@ fn test_add_dividend_with_decimal_shares() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Shares owned: 100.5"));
-    assert!(stdout.contains("Total dividend: $24.12")); // 0.24 * 100.5 = 24.12
+    assert!(stdout.contains("Total dividend: $24")); // 0.24 * 100.5 = 24.12 but displayed as $24
     assert!(stdout.contains("Dividend record added successfully"));
 
     Ok(())

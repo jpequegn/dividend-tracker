@@ -7,6 +7,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use tabled::{builder::Builder, settings::Style};
 
+mod analytics;
 mod api;
 mod config;
 mod holdings;
@@ -164,6 +165,33 @@ enum Commands {
         /// Year to summarize (defaults to current year)
         #[arg(short, long)]
         year: Option<i32>,
+        /// Quarter to summarize (format: Q1-2024, Q2-2024, etc.)
+        #[arg(short, long)]
+        quarter: Option<String>,
+        /// Show top dividend paying stocks
+        #[arg(long)]
+        top_payers: Option<usize>,
+        /// Show year-over-year growth analysis
+        #[arg(long)]
+        growth: bool,
+        /// Show dividend frequency analysis
+        #[arg(long)]
+        frequency: bool,
+        /// Show dividend consistency analysis
+        #[arg(long)]
+        consistency: bool,
+        /// Show yield analysis (requires holdings with cost basis)
+        #[arg(long)]
+        yield_analysis: bool,
+        /// Export summary to CSV file
+        #[arg(long)]
+        export_csv: Option<String>,
+        /// Show monthly breakdown for the year
+        #[arg(long)]
+        monthly: bool,
+        /// Show all analytics (equivalent to --growth --frequency --consistency --yield-analysis)
+        #[arg(long)]
+        all: bool,
     },
     /// Import dividend data from CSV file
     Import {
@@ -375,12 +403,30 @@ fn main() -> Result<()> {
                 reverse
             )?;
         }
-        Some(Commands::Summary { year }) => {
-            println!("{}", "Portfolio Summary".green().bold());
-            if let Some(year) = year {
-                println!("Year: {}", year.to_string().blue());
-            }
-            println!("{}", "No data available yet.".yellow());
+        Some(Commands::Summary {
+            year,
+            quarter,
+            top_payers,
+            growth,
+            frequency,
+            consistency,
+            yield_analysis,
+            export_csv,
+            monthly,
+            all,
+        }) => {
+            handle_summary_command(
+                year,
+                quarter,
+                top_payers,
+                growth,
+                frequency,
+                consistency,
+                yield_analysis,
+                export_csv,
+                monthly,
+                all,
+            )?;
         }
         Some(Commands::Import { file }) => {
             println!("{}", "Importing dividend data...".green());
@@ -697,6 +743,518 @@ fn handle_list_command(
 
         println!("  Sorted by: {} {}", sort_by.yellow(),
             if reverse { "(descending)".dimmed() } else { "(ascending)".dimmed() });
+    }
+
+    Ok(())
+}
+
+/// Handle summary command with comprehensive analytics
+fn handle_summary_command(
+    year: Option<i32>,
+    quarter: Option<String>,
+    top_payers: Option<usize>,
+    growth: bool,
+    frequency: bool,
+    consistency: bool,
+    yield_analysis: bool,
+    export_csv: Option<String>,
+    monthly: bool,
+    all: bool,
+) -> Result<()> {
+    use crate::analytics::DividendAnalytics;
+
+    println!("{}", "Portfolio Summary & Analytics".green().bold());
+    println!();
+
+    // Load persistence manager and existing data
+    let persistence = PersistenceManager::new()?;
+    let tracker = persistence.load()?;
+
+    if tracker.dividends.is_empty() {
+        println!(
+            "{}",
+            "No dividend records found. Use 'add' command to add some dividends first!".yellow()
+        );
+        return Ok(());
+    }
+
+    // Set flags based on 'all' option
+    let show_growth = all || growth;
+    let show_frequency = all || frequency;
+    let show_consistency = all || consistency;
+    let show_yield = all || yield_analysis;
+
+    // Generate analytics
+    let analytics = DividendAnalytics::generate(
+        &tracker,
+        year,
+        quarter.as_deref(),
+    )?;
+
+    // Display basic summary
+    display_basic_summary(&analytics, year, quarter.as_deref())?;
+
+    // Display monthly breakdown if requested
+    if monthly {
+        display_monthly_breakdown(&analytics, year)?;
+    }
+
+    // Display quarterly breakdown if quarter filter is used
+    if quarter.is_some() {
+        display_quarterly_breakdown(&analytics)?;
+    }
+
+    // Display top payers
+    if let Some(limit) = top_payers {
+        display_top_payers(&analytics, limit)?;
+    }
+
+    // Display growth analysis
+    if show_growth {
+        display_growth_analysis(&analytics)?;
+    }
+
+    // Display frequency analysis
+    if show_frequency {
+        display_frequency_analysis(&analytics)?;
+    }
+
+    // Display consistency analysis
+    if show_consistency {
+        display_consistency_analysis(&analytics)?;
+    }
+
+    // Display yield analysis
+    if show_yield {
+        display_yield_analysis(&analytics)?;
+    }
+
+    // Export to CSV if requested
+    if let Some(csv_path) = export_csv {
+        analytics.export_to_csv(&csv_path)?;
+        println!();
+        println!("{} Analytics exported to {}",
+                 "✓".green(),
+                 csv_path.cyan());
+    }
+
+    Ok(())
+}
+
+fn display_basic_summary(
+    analytics: &analytics::DividendAnalytics,
+    year: Option<i32>,
+    quarter: Option<&str>,
+) -> Result<()> {
+    println!("{}", "📊 Basic Summary".blue().bold());
+
+    if let Some(year) = year {
+        println!("  Year: {}", year.to_string().cyan());
+    }
+    if let Some(quarter) = quarter {
+        println!("  Quarter: {}", quarter.cyan());
+    }
+
+    println!("  Total Dividend Income: {}",
+             format!("${:.2}", analytics.total_dividends).green().bold());
+    println!("  Total Payments: {}",
+             analytics.total_payments.to_string().cyan());
+    println!("  Unique Stocks: {}",
+             analytics.unique_symbols.to_string().cyan());
+
+    if analytics.total_payments > 0 {
+        let avg_payment = analytics.total_dividends / rust_decimal::Decimal::from(analytics.total_payments);
+        println!("  Average Payment: {}",
+                 format!("${:.2}", avg_payment).yellow());
+    }
+
+    println!();
+    Ok(())
+}
+
+fn display_monthly_breakdown(
+    analytics: &analytics::DividendAnalytics,
+    year: Option<i32>,
+) -> Result<()> {
+    if analytics.monthly_breakdown.is_empty() {
+        return Ok(());
+    }
+
+    println!("{}", "📅 Monthly Breakdown".blue().bold());
+
+    let current_year = chrono::Local::now().year();
+    let display_year = year.unwrap_or(current_year);
+    println!("  Year: {}", display_year.to_string().cyan());
+    println!();
+
+    let mut builder = Builder::new();
+    builder.push_record(vec![
+        "Month".bold().to_string(),
+        "Total".bold().to_string(),
+        "Payments".bold().to_string(),
+        "Stocks".bold().to_string(),
+        "Top Stock".bold().to_string(),
+        "Top Amount".bold().to_string(),
+    ]);
+
+    let mut months: Vec<_> = analytics.monthly_breakdown.keys().collect();
+    months.sort();
+
+    for month in months {
+        let summary = &analytics.monthly_breakdown[month];
+        let month_name = match *month {
+            1 => "January",
+            2 => "February",
+            3 => "March",
+            4 => "April",
+            5 => "May",
+            6 => "June",
+            7 => "July",
+            8 => "August",
+            9 => "September",
+            10 => "October",
+            11 => "November",
+            12 => "December",
+            _ => return Err(anyhow::anyhow!("Invalid month: {}", month)),
+        }.to_string();
+
+        builder.push_record(vec![
+            month_name,
+            format!("${:.2}", summary.total_amount),
+            summary.payment_count.to_string(),
+            summary.unique_symbols.to_string(),
+            summary.top_symbol.as_deref().unwrap_or("-").to_string(),
+            if summary.top_amount > rust_decimal::Decimal::ZERO {
+                format!("${:.2}", summary.top_amount)
+            } else {
+                "-".to_string()
+            },
+        ]);
+    }
+
+    let mut table = builder.build();
+    table.with(Style::rounded());
+    println!("{}", table);
+    println!();
+
+    Ok(())
+}
+
+fn display_quarterly_breakdown(
+    analytics: &analytics::DividendAnalytics,
+) -> Result<()> {
+    if analytics.quarterly_breakdown.is_empty() {
+        return Ok(());
+    }
+
+    println!("{}", "📈 Quarterly Breakdown".blue().bold());
+    println!();
+
+    let mut builder = Builder::new();
+    builder.push_record(vec![
+        "Quarter".bold().to_string(),
+        "Total".bold().to_string(),
+        "Payments".bold().to_string(),
+        "Stocks".bold().to_string(),
+    ]);
+
+    let mut quarters: Vec<_> = analytics.quarterly_breakdown.keys().collect();
+    quarters.sort();
+
+    for quarter in quarters {
+        let summary = &analytics.quarterly_breakdown[quarter];
+        builder.push_record(vec![
+            quarter.clone(),
+            format!("${:.2}", summary.total_amount),
+            summary.payment_count.to_string(),
+            summary.unique_symbols.to_string(),
+        ]);
+    }
+
+    let mut table = builder.build();
+    table.with(Style::rounded());
+    println!("{}", table);
+    println!();
+
+    Ok(())
+}
+
+fn display_top_payers(
+    analytics: &analytics::DividendAnalytics,
+    limit: usize,
+) -> Result<()> {
+    if analytics.top_payers.is_empty() {
+        return Ok(());
+    }
+
+    println!("{}", format!("🏆 Top {} Dividend Payers", limit).blue().bold());
+    println!();
+
+    let mut builder = Builder::new();
+    builder.push_record(vec![
+        "Rank".bold().to_string(),
+        "Symbol".bold().to_string(),
+        "Total".bold().to_string(),
+        "Payments".bold().to_string(),
+        "Avg/Payment".bold().to_string(),
+        "First Payment".bold().to_string(),
+        "Latest Payment".bold().to_string(),
+    ]);
+
+    for (i, payer) in analytics.top_payers.iter().take(limit).enumerate() {
+        builder.push_record(vec![
+            (i + 1).to_string(),
+            payer.symbol.clone(),
+            format!("${:.2}", payer.total_amount),
+            payer.payment_count.to_string(),
+            format!("${:.2}", payer.average_amount),
+            payer.first_payment.format("%Y-%m-%d").to_string(),
+            payer.last_payment.format("%Y-%m-%d").to_string(),
+        ]);
+    }
+
+    let mut table = builder.build();
+    table.with(Style::rounded());
+    println!("{}", table);
+    println!();
+
+    Ok(())
+}
+
+fn display_growth_analysis(
+    analytics: &analytics::DividendAnalytics,
+) -> Result<()> {
+    if let Some(growth) = &analytics.growth_analysis {
+        println!("{}", "📈 Year-over-Year Growth Analysis".blue().bold());
+        println!();
+
+        let mut builder = Builder::new();
+        builder.push_record(vec![
+            "Year".bold().to_string(),
+            "Total".bold().to_string(),
+            "Payments".bold().to_string(),
+            "Growth Rate".bold().to_string(),
+        ]);
+
+        for yearly in &growth.year_over_year {
+            let growth_display = if let Some(rate) = yearly.growth_rate {
+                if rate >= rust_decimal::Decimal::ZERO {
+                    format!("+{:.1}%", rate).green().to_string()
+                } else {
+                    format!("{:.1}%", rate).red().to_string()
+                }
+            } else {
+                "-".to_string()
+            };
+
+            builder.push_record(vec![
+                yearly.year.to_string(),
+                format!("${:.2}", yearly.total_dividends),
+                yearly.payment_count.to_string(),
+                growth_display,
+            ]);
+        }
+
+        let mut table = builder.build();
+        table.with(Style::rounded());
+        println!("{}", table);
+
+        println!("  Total Growth Rate: {}",
+                 if growth.total_growth_rate >= rust_decimal::Decimal::ZERO {
+                     format!("+{:.1}%", growth.total_growth_rate).green()
+                 } else {
+                     format!("{:.1}%", growth.total_growth_rate).red()
+                 });
+
+        println!("  Average Annual Growth: {}",
+                 if growth.average_annual_growth >= rust_decimal::Decimal::ZERO {
+                     format!("+{:.1}%", growth.average_annual_growth).green()
+                 } else {
+                     format!("{:.1}%", growth.average_annual_growth).red()
+                 });
+
+        if let Some(best) = &growth.best_year {
+            println!("  Best Year: {} with {:.1}% growth",
+                     best.year.to_string().cyan(),
+                     best.growth_rate.unwrap_or_default());
+        }
+
+        if let Some(worst) = &growth.worst_year {
+            println!("  Worst Year: {} with {:.1}% growth",
+                     worst.year.to_string().cyan(),
+                     worst.growth_rate.unwrap_or_default());
+        }
+
+        println!();
+    } else {
+        println!("{}", "📈 Growth Analysis: Insufficient data (need 2+ years)".yellow());
+        println!();
+    }
+
+    Ok(())
+}
+
+fn display_frequency_analysis(
+    analytics: &analytics::DividendAnalytics,
+) -> Result<()> {
+    let freq = &analytics.frequency_analysis;
+    println!("{}", "⏰ Dividend Frequency Analysis".blue().bold());
+    println!();
+
+    if !freq.monthly_payers.is_empty() {
+        println!("  {} {}: {}",
+                 "Monthly Payers".green().bold(),
+                 format!("({})", freq.monthly_payers.len()).dimmed(),
+                 freq.monthly_payers.join(", "));
+    }
+
+    if !freq.quarterly_payers.is_empty() {
+        println!("  {} {}: {}",
+                 "Quarterly Payers".green().bold(),
+                 format!("({})", freq.quarterly_payers.len()).dimmed(),
+                 freq.quarterly_payers.join(", "));
+    }
+
+    if !freq.semi_annual_payers.is_empty() {
+        println!("  {} {}: {}",
+                 "Semi-Annual Payers".green().bold(),
+                 format!("({})", freq.semi_annual_payers.len()).dimmed(),
+                 freq.semi_annual_payers.join(", "));
+    }
+
+    if !freq.annual_payers.is_empty() {
+        println!("  {} {}: {}",
+                 "Annual Payers".green().bold(),
+                 format!("({})", freq.annual_payers.len()).dimmed(),
+                 freq.annual_payers.join(", "));
+    }
+
+    if !freq.irregular_payers.is_empty() {
+        println!("  {} {}: {}",
+                 "Irregular Payers".yellow().bold(),
+                 format!("({})", freq.irregular_payers.len()).dimmed(),
+                 freq.irregular_payers.join(", "));
+    }
+
+    println!();
+    Ok(())
+}
+
+fn display_consistency_analysis(
+    analytics: &analytics::DividendAnalytics,
+) -> Result<()> {
+    let consistency = &analytics.consistency_analysis;
+    println!("{}", "🎯 Dividend Consistency Analysis".blue().bold());
+    println!();
+
+    println!("  Portfolio Consistency Score: {:.1}%",
+             consistency.average_consistency_score.to_string().cyan());
+    println!();
+
+    if !consistency.consistent_payers.is_empty() {
+        println!("  {} {} 🌟",
+                 "Consistent Payers".green().bold(),
+                 format!("({})", consistency.consistent_payers.len()).dimmed());
+
+        let mut builder = Builder::new();
+        builder.push_record(vec![
+            "Symbol".bold().to_string(),
+            "Score".bold().to_string(),
+            "Frequency".bold().to_string(),
+        ]);
+
+        for payer in &consistency.consistent_payers {
+            let score_color = if payer.consistency_score >= 90.0 {
+                format!("{:.1}%", payer.consistency_score).green()
+            } else if payer.consistency_score >= 80.0 {
+                format!("{:.1}%", payer.consistency_score).yellow()
+            } else {
+                format!("{:.1}%", payer.consistency_score).normal()
+            };
+
+            builder.push_record(vec![
+                payer.symbol.clone(),
+                score_color.to_string(),
+                payer.expected_frequency.clone(),
+            ]);
+        }
+
+        let mut table = builder.build();
+        table.with(Style::rounded());
+        println!("{}", table);
+    }
+
+    if !consistency.inconsistent_payers.is_empty() {
+        println!("  {} {}: {}",
+                 "Inconsistent Payers".red().bold(),
+                 format!("({})", consistency.inconsistent_payers.len()).dimmed(),
+                 consistency.inconsistent_payers.join(", "));
+    }
+
+    println!();
+    Ok(())
+}
+
+fn display_yield_analysis(
+    analytics: &analytics::DividendAnalytics,
+) -> Result<()> {
+    if let Some(yields) = &analytics.yield_analysis {
+        println!("{}", "💰 Dividend Yield Analysis".blue().bold());
+        println!();
+
+        println!("  Portfolio Average Yield: {:.2}%", yields.average_yield);
+        println!();
+
+        if !yields.stock_yields.is_empty() {
+            let mut builder = Builder::new();
+            builder.push_record(vec![
+                "Symbol".bold().to_string(),
+                "Annual Dividend".bold().to_string(),
+                "Cost Basis".bold().to_string(),
+                "Shares".bold().to_string(),
+                "Yield %".bold().to_string(),
+            ]);
+
+            for stock_yield in &yields.stock_yields {
+                let yield_color = if stock_yield.yield_percent >= rust_decimal::Decimal::from(5) {
+                    format!("{:.2}%", stock_yield.yield_percent).green()
+                } else if stock_yield.yield_percent >= rust_decimal::Decimal::from(3) {
+                    format!("{:.2}%", stock_yield.yield_percent).yellow()
+                } else {
+                    format!("{:.2}%", stock_yield.yield_percent).normal()
+                };
+
+                builder.push_record(vec![
+                    stock_yield.symbol.clone(),
+                    format!("${:.2}", stock_yield.annual_dividend),
+                    format!("${:.2}", stock_yield.cost_basis),
+                    stock_yield.shares.to_string(),
+                    yield_color.to_string(),
+                ]);
+            }
+
+            let mut table = builder.build();
+            table.with(Style::rounded());
+            println!("{}", table);
+
+            if let Some(highest) = &yields.highest_yielding {
+                println!("  Highest Yielding: {} at {:.2}%",
+                         highest.symbol.cyan(),
+                         highest.yield_percent);
+            }
+
+            if let Some(lowest) = &yields.lowest_yielding {
+                println!("  Lowest Yielding: {} at {:.2}%",
+                         lowest.symbol.cyan(),
+                         lowest.yield_percent);
+            }
+        }
+
+        println!();
+    } else {
+        println!("{}", "💰 Yield Analysis: No holdings with cost basis found".yellow());
+        println!("   Add holdings with cost basis using 'holdings add' command");
+        println!();
     }
 
     Ok(())
