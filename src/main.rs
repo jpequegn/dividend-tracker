@@ -18,7 +18,6 @@ mod projections;
 mod tax;
 
 use persistence::PersistenceManager;
-use projections::{GrowthScenario, ProjectionEngine, ProjectionMethod};
 
 #[derive(Parser)]
 #[command(name = "dividend-tracker")]
@@ -2134,7 +2133,7 @@ fn display_projection_metadata(projection: &projections::DividendProjection) -> 
 
 /// Handle tax-related commands
 fn handle_tax_command(command: TaxCommands) -> Result<()> {
-    use crate::tax::*;
+    
 
     match command {
         TaxCommands::Summary {
